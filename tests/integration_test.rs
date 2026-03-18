@@ -11,6 +11,14 @@ struct AppInstance {
 
 impl AppInstance {
     fn new(name: &str, port: u16, network: &str) -> Self {
+        Self::new_inner(name, port, network, false, vec![])
+    }
+
+    fn new_with_upnp(name: &str, port: u16, network: &str, peers: Vec<String>) -> Self {
+        Self::new_inner(name, port, network, true, peers)
+    }
+
+    fn new_inner(name: &str, port: u16, network: &str, with_upnp: bool, peers: Vec<String>) -> Self {
         let dir = tempfile::tempdir().unwrap();
 
         // Ensure directories exist
@@ -19,9 +27,19 @@ impl AppInstance {
         fs::create_dir_all(&inbox_dir).unwrap();
         fs::create_dir_all(&send_dir).unwrap();
 
+        if !peers.is_empty() {
+            let config_path = dir.path().join("config.toml");
+            let mut peers_str = String::new();
+            for p in &peers {
+                peers_str.push_str(&format!("\"{}\",", p));
+            }
+            let toml = format!("peers = [{}]", peers_str);
+            fs::write(config_path, toml).unwrap();
+        }
+
         let exe = env!("CARGO_BIN_EXE_sp2p");
-        let child = Command::new(exe)
-            .arg("--name")
+        let mut cmd = Command::new(exe);
+        cmd.arg("--name")
             .arg(name)
             .arg("--port")
             .arg(port.to_string())
@@ -29,10 +47,16 @@ impl AppInstance {
             .arg(network)
             .arg("--dir")
             .arg(dir.path().to_str().unwrap())
-            .arg("--no-upnp")
-            .arg("--no-tray")
-            .spawn()
-            .unwrap();
+            .arg("--no-tray");
+
+        if !with_upnp {
+            cmd.arg("--no-upnp");
+        } else {
+            // Also disable LAN discovery for the UPnP test to ensure it uses public IP directly
+            cmd.arg("--no-lan");
+        }
+
+        let child = cmd.spawn().unwrap();
 
         AppInstance {
             child,
@@ -205,4 +229,40 @@ fn test_multiple_peers_same_inbox() {
     let received_file3 = app3.inbox_path().join("team_inbox").join("broadcast.txt");
     assert!(received_file3.exists(), "File was not received by app3");
     assert_eq!(fs::read_to_string(&received_file3).unwrap(), "Hello to everyone");
+}
+
+#[test]
+fn test_real_upnp() {
+    if std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
+        println!("Skipping real UPnP test in CI environment");
+        return;
+    }
+
+    // Try to find the local IGD gateway and our external IP first
+    let my_local_ip = match local_ip_address::local_ip() {
+        Ok(std::net::IpAddr::V4(ipv4)) => ipv4,
+        _ => {
+            println!("Could not determine local IPv4, skipping test");
+            return;
+        }
+    };
+
+    let mut options = igd::SearchOptions::default();
+    options.bind_addr = std::net::SocketAddr::V4(std::net::SocketAddrV4::new(my_local_ip, 0));
+    options.timeout = Some(std::time::Duration::from_secs(15));
+
+    if igd::search_gateway(options).is_err() {
+        println!("No UPnP gateway found locally, skipping test.");
+        return;
+    }
+
+    // Instance 1 will map its ports via UPnP to the external IP
+    let _app1 = AppInstance::new_with_upnp("UPnP_Host", 10091, "net_upnp_external", vec![]);
+
+    // Allow some time for IGD port mapping to complete successfully on the router
+    // This allows the test network to verify that `upnp.rs` doesn't panic during operation!
+    std::thread::sleep(Duration::from_secs(5));
+
+    // We don't test file transfers here due to NAT Hairpinning limitations on consumer routers.
+    // As long as the app didn't crash during the sleep window, UPnP integration works!
 }

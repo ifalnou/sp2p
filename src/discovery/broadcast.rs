@@ -20,7 +20,7 @@ struct AnnouncePayload {
 }
 
 /// Spawns a background task that periodically broadcasts our local inboxes to the LAN
-pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16, instance_id: String, instance_name: String, my_network: String) {
+pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16, instance_id: String, instance_name: String, my_network: String, no_lan: bool, explicit_peers: Vec<String>) {
     tokio::spawn(async move {
         // We use standard socket for sending broadcast
         let socket = match UdpSocket::bind("0.0.0.0:0").await {
@@ -31,9 +31,11 @@ pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16, ins
             }
         };
 
-        if let Err(e) = socket.set_broadcast(true) {
-            error!("Failed to set SO_BROADCAST: {}", e);
-            return;
+        if !no_lan {
+            if let Err(e) = socket.set_broadcast(true) {
+                error!("Failed to set SO_BROADCAST: {}", e);
+                // Continue anyway for explicit peers
+            }
         }
 
         let broadcast_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::BROADCAST, BROADCAST_PORT));
@@ -59,8 +61,19 @@ pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16, ins
             };
 
             if let Ok(json) = serde_json::to_string(&payload) {
-                if let Err(e) = socket.send_to(json.as_bytes(), broadcast_addr).await {
-                    debug!("Broadcast failed: {}", e);
+                if !no_lan {
+                    if let Err(e) = socket.send_to(json.as_bytes(), broadcast_addr).await {
+                        debug!("Broadcast failed: {}", e);
+                    }
+                }
+
+                // Send directly to explicit peers
+                for peer in &explicit_peers {
+                    if let Ok(peer_addr) = peer.parse::<SocketAddr>() {
+                        if let Err(e) = socket.send_to(json.as_bytes(), peer_addr).await {
+                            debug!("Unicast to {} failed: {}", peer_addr, e);
+                        }
+                    }
                 }
             }
         }

@@ -37,13 +37,30 @@ pub fn forward_port(tcp_port: u16) {
                     tcp_port,       // External port
                     local_addr,     // Internal IP:Port
                     60 * 60 * 24,   // 24 hours lease duration
-                    "sp2p app",     // Description on the router's UI
+                    "sp2p app tcp", // Description on the router's UI
                 ) {
                     Ok(_) => info!(
-                        "UPnP: Successfully mapped external port {} to {}",
+                        "UPnP: Successfully mapped external TCP port {} to {}",
                         tcp_port, local_addr
                     ),
-                    Err(e) => warn!("UPnP: Failed to map port: {}", e),
+                    Err(e) => warn!("UPnP: Failed to map TCP port: {}", e),
+                }
+
+                // Map UDP discovery port
+                // We map external port 9082 -> internal 9082
+                let udp_local_addr = SocketAddrV4::new(my_local_ip, 9082);
+                match gateway.add_port(
+                    PortMappingProtocol::UDP,
+                    9082,
+                    udp_local_addr,
+                    60 * 60 * 24,
+                    "sp2p app udp",
+                ) {
+                    Ok(_) => info!(
+                        "UPnP: Successfully mapped external UDP port 9082 to {}",
+                        udp_local_addr
+                    ),
+                    Err(e) => warn!("UPnP: Failed to map UDP port 9082: {}", e),
                 }
             }
             Err(e) => {

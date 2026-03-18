@@ -78,6 +78,10 @@ struct Args {
     #[arg(long)]
     no_upnp: bool,
 
+    /// Disable LAN broadcast discovery
+    #[arg(long)]
+    no_lan: bool,
+
     /// Disable System Tray UI
     #[arg(long)]
     no_tray: bool,
@@ -129,7 +133,7 @@ async fn main() {
     let local_inboxes = Arc::new(LocalInboxes::new());
 
     // Setup static peers from config
-    for peer in config.peers {
+    for peer in &config.peers {
         if let Ok(ip) = peer.parse::<std::net::IpAddr>() {
             // Static peers can be pre-seeded, or we might need to actively poll them.
             // For now, they are just parsed. They will be integrated in TCP logic.
@@ -155,7 +159,15 @@ async fn main() {
     let instance_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
 
     // 6. Start Discovery (UDP Broadcasts)
-    spawn_broadcaster(local_inboxes.clone(), args.port, instance_id.clone(), instance_name.clone(), args.network.clone());
+    spawn_broadcaster(
+        local_inboxes.clone(),
+        args.port,
+        instance_id.clone(),
+        instance_name.clone(),
+        args.network.clone(),
+        args.no_lan,
+        config.peers.clone(),
+    );
     spawn_listener(router.clone(), instance_id, args.network);
 
     // 7. Request UPnP Port Forwarding async (unless disabled)
