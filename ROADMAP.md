@@ -46,26 +46,48 @@ The application manages a root directory (e.g., alongside the executable):
 3.  **Routing**: When a file is dropped in `send/photos`, check the internal routing table for any IP that last advertised possessing a `photos` inbox. Initiate a TCP connection to `IP:9081` to stream the payload.
 4.  **Cleanup**: Upon successful network acknowledgment, remove the file from `send/` (or move to `sent/`).
 
-## 4. Proposed Roadmap Phases
+## 4. Completed Milestones
 
 ### Phase 1: The Skeleton
-- [ ] Initialize Windows-targeted Rust project.
-- [ ] Implement `clap` for argument parsing (`--debug`).
-- [ ] Add conditional console allocation logic for Windows (hide naturally, show on `--debug`).
-- [ ] Setup default folder creation on startup (`/inbox`, `/send`).
+- [x] Initialize Windows-targeted Rust project.
+- [x] Implement `clap` for CLI argument parsing.
+- [x] Add conditional console allocation logic for Windows (hide naturally, show on `--debug`).
+- [x] Setup default folder creation on startup (`/inbox`, `/send`).
 
 ### Phase 2: Core Routing & Discovery
-- [ ] Dynamic inbox detection: Watch the `/inbox` folder for directory creation/deletion.
-- [ ] Implement UDP broadcast loop on port `9082`.
-- [ ] Maintain an in-memory thread-safe routing table `Inbox Name -> List of IPs`.
-- [ ] Poll or parse `config.toml` for static IP fallback list.
+- [x] Dynamic inbox detection: Watch the `/inbox` folder for directory creation/deletion.
+- [x] Implement UDP broadcast loop on port `9082`.
+- [x] Maintain an in-memory thread-safe routing table `Inbox Name -> List of IPs`.
+- [x] Parse `config.toml` for static IP fallback list & explicit peers mapping.
 
 ### Phase 3: File Transfer & System Tray
-- [ ] Implement Windows-native scalable file system watcher (`notify`).
-- [ ] Build the file streaming TCP server/client (Port `9081`).
-- [ ] Wire up Windows System Tray (Icon, Menu, Quit).
+- [x] Implement Windows-native scalable file system watcher (`notify`).
+- [x] Build the file streaming TCP server/client (Port `9081`).
+- [x] Wire up Windows System Tray (Icon, Menu, Quit).
+- [x] Handle nested folder transfers faithfully recreating the tree on the receiving end.
 
-### Phase 4: Port Forwarding & Edge Cases
-- [ ] Integrate UPnP (e.g., the `igd` crate) to auto-forward port `9081` on routers.
-- [ ] Handle routing conflicts (e.g. if two IPs claim the same inbox name – send to both).
-- [ ] Prevent file locking issues during transfer.
+### Phase 4: Port Forwarding & Advanced Networking
+- [x] Integrate UPnP (via `igd` crate) to auto-forward TCP `9081` and UDP `9082` on routers.
+- [x] Handle routing conflicts (send to all matching IPs broadcasting a matching inbox).
+- [x] Prevent file locking issues during transfer via proper debouncing.
+- [x] Allow running disconnected from LAN using explicit unicast (`--no-lan`).
+
+## 5. Future Improvements & Next Steps
+
+Based on initial testing and usage, the following features have been identified as high-value for future iterations:
+
+### 5.1 Security & Privacy
+- **End-to-End Encryption (E2EE):** Encrypt TCP streams (e.g., via `rustls` or Noise Protocol) so files in transit over WAN/Public IPs cannot be intercepted.
+- **Network Group Passwords:** Keep peer authentication simple. Peers within the same `--network` group are fundamentally trusted, but adding a shared network password would secure file transfers and drop packets from untrusted agents attempting to spoof identical networks or inbox names.
+
+### 5.2 Reliability & Large Files
+- **Chunking & Resume Support:** Instead of restarting dropped transfers from 0%, allow peers to negotiate file offsets and resume appending to partially downloaded data (crucial for large transfers).
+- **File Hash Integrity:** Calculate a fast hash (e.g., `BLAKE3`) during transfer and verify it at the end to guarantee data isn't corrupted over the wire.
+*Note: Intentional omission of bandwidth limiting. The design philosophy favors keeping it simple and always utilizing the maximum available bandwidth.*
+
+### 5.3 User Experience (UX)
+- **OS Notifications (Must Have!):** Integrate desktop toast notifications (e.g., via `notify-rust` or native Windows APIs) to alert the user when a new file successfully arrives in their inbox.
+- **Lightweight Native UI / Progress:** Keep the background-first service philosophy, but introduce a small native UI window (accessible from the System Tray) to display real-time progress bars for large transfers, active peers, and recent transfer history.
+
+### 5.4 Advanced Networking (Pending Evaluation)
+- **NAT Traversal (Hole Punching) & Relay Fallback:** Deferred for now. UPnP covers basic WAN scenarios. If extended usage and testing indicate strict NAT/UPnP failure is a common bottleneck, STUN/TURN based UDP hole punching or fallback relays will be reconsidered.
