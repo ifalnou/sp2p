@@ -18,7 +18,15 @@ impl AppInstance {
         Self::new_inner(name, port, network, true, peers)
     }
 
+    fn new_with_password(name: &str, port: u16, network: &str, password: &str) -> Self {
+        Self::new_inner_advanced(name, port, network, false, vec![], Some(password.to_string()))
+    }
+
     fn new_inner(name: &str, port: u16, network: &str, with_upnp: bool, peers: Vec<String>) -> Self {
+        Self::new_inner_advanced(name, port, network, with_upnp, peers, None)
+    }
+
+    fn new_inner_advanced(name: &str, port: u16, network: &str, with_upnp: bool, peers: Vec<String>, password: Option<String>) -> Self {
         let dir = tempfile::tempdir().unwrap();
 
         // Ensure directories exist
@@ -27,13 +35,19 @@ impl AppInstance {
         fs::create_dir_all(&inbox_dir).unwrap();
         fs::create_dir_all(&send_dir).unwrap();
 
+        let config_path = dir.path().join("config.toml");
+        let mut toml = String::new();
         if !peers.is_empty() {
-            let config_path = dir.path().join("config.toml");
             let mut peers_str = String::new();
             for p in &peers {
                 peers_str.push_str(&format!("\"{}\",", p));
             }
-            let toml = format!("peers = [{}]", peers_str);
+            toml.push_str(&format!("peers = [{}]\n", peers_str));
+        }
+        if let Some(pw) = password {
+            toml.push_str(&format!("password = \"{}\"\n", pw));
+        }
+        if !toml.is_empty() {
             fs::write(config_path, toml).unwrap();
         }
 
@@ -272,4 +286,20 @@ fn test_real_upnp() {
 
     // We don't test file transfers here due to NAT Hairpinning limitations on consumer routers.
     // As long as the app didn't crash during the sleep window, UPnP integration works!
+}
+
+#[test]
+fn test_password_mismatch_fails() {
+    let _peer1 = AppInstance::new_with_password("Secure 1", 10090, "securenet", "my-secret");
+    let peer2 = AppInstance::new_with_password("Secure 2", 10091, "securenet", "wrong-secret");
+
+    peer2.create_inbox("secret_inbox");
+    std::thread::sleep(Duration::from_secs(2));
+
+    _peer1.send_file("secret_inbox", "topsecret.txt", "Some hidden data");
+
+    std::thread::sleep(Duration::from_secs(3));
+
+    let received_file = peer2.inbox_path().join("secret_inbox").join("topsecret.txt");
+    assert!(!received_file.exists(), "File should not be transferred due to mismatched passwords/keys");
 }

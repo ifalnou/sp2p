@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, BufReader};
+use tokio::io::{BufReader, AsyncWriteExt};
 use tokio::fs::File;
 use tracing::{error, info, debug};
+use std::sync::Arc;
+use snow::TransportState;
+use crate::core::crypto::{noise_server_handshake, read_noise};
 
-pub fn spawn_server(port: u16, inbox_root: PathBuf) {
+pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
     tokio::spawn(async move {
         let listener = match TcpListener::bind(("0.0.0.0", port)).await {
             Ok(l) => l,
@@ -20,22 +23,28 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
             match listener.accept().await {
                 Ok((mut socket, addr)) => {
                     let root = inbox_root.clone();
+                    let psk = crypto_key.clone();
+                    
                     tokio::spawn(async move {
                         debug!("Accepted connection from {}", addr);
+                        
+                        // Handshake
+                        let mut noise = match noise_server_handshake(&mut socket, &psk).await {
+                            Ok(n) => n,
+                            Err(e) => {
+                                error!("Noise handshake failed from {}: {}", addr, e);
+                                return;
+                            }
+                        };
+
                         let mut reader = BufReader::new(&mut socket);
 
-                        // Simple custom protocol:
-                        // 1. Inbox name length (u32) + bytes
-                        // 2. File name length (u32) + bytes
-                        // 3. File size (u64)
-                        // 4. File data
-
-                        let inbox_name = match read_string(&mut reader).await {
+                        let inbox_name = match read_encrypted_string(&mut reader, &mut noise).await {
                             Ok(s) => s,
                             Err(e) => { error!("Failed to read inbox name: {}", e); return; }
                         };
 
-                        let file_name = match read_string(&mut reader).await {
+                        let file_name = match read_encrypted_string(&mut reader, &mut noise).await {
                             Ok(s) => s,
                             Err(e) => { error!("Failed to read file name: {}", e); return; }
                         };
@@ -46,15 +55,23 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
                             return;
                         }
 
-                        let file_size = match reader.read_u64().await {
-                            Ok(s) => s,
-                            Err(e) => { error!("Failed to read file size: {}", e); return; }
+                        let file_size_bytes = match read_noise(&mut reader, &mut noise).await {
+                            Ok(b) => b,
+                            Err(e) => { error!("Failed to read file size block: {}", e); return; }
                         };
+                        
+                        if file_size_bytes.len() != 8 {
+                            error!("Invalid file size block length");
+                            return;
+                        }
+                        
+                        let mut fb = [0u8; 8];
+                        fb.copy_from_slice(&file_size_bytes[0..8]);
+                        let file_size = u64::from_be_bytes(fb);
 
                         let dest_dir = root.join(&inbox_name);
                         // Security basic: check if dest_dir exists and is indeed a subfolder of inbox
                         if !dest_dir.exists() {
-                            // Automatically accept anyway? The roadmap says "appear in the app_folder/inbox/{inbox_name}"
                             // Let's create it if it doesn't exist.
                             if let Err(e) = tokio::fs::create_dir_all(&dest_dir).await {
                                 error!("Failed to create destination dir: {}", e);
@@ -88,19 +105,17 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
                         };
 
                         let mut bytes_copied = 0;
-                        let mut buffer = [0u8; 8192];
                         while bytes_copied < file_size {
-                            let to_read = std::cmp::min((file_size - bytes_copied) as usize, buffer.len());
-                            match reader.read_exact(&mut buffer[..to_read]).await {
-                                Ok(n) if n > 0 => {
-                                    if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut file, &buffer[..n]).await {
+                            match read_noise(&mut reader, &mut noise).await {
+                                Ok(data) => {
+                                    if let Err(e) = file.write_all(&data).await {
                                         error!("Failed to write to disk: {}", e);
                                         return;
                                     }
-                                    bytes_copied += n as u64;
+                                    bytes_copied += data.len() as u64;
                                 }
-                                _ => {
-                                    error!("Connection closed prematurely while transferring file");
+                                Err(e) => {
+                                    error!("Connection closed or corrupted transfer: {}", e);
                                     return;
                                 }
                             }
@@ -115,13 +130,24 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
     });
 }
 
-async fn read_string<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> std::io::Result<String> {
-    let len = reader.read_u32().await? as usize;
-    // Arbitrary reasonable limit (1024 bytes for a string is generous for folder/file names)
-    if len > 1024 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "String too long"));
+async fn read_encrypted_string<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+    noise: &mut TransportState,
+) -> std::io::Result<String> {
+    let plain_bytes = read_noise(reader, noise).await?;
+    
+    if plain_bytes.len() < 4 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "String block too short"));
     }
-    let mut buf = vec![0u8; len];
-    reader.read_exact(&mut buf).await?;
-    String::from_utf8(buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    
+    let mut len_buf = [0u8; 4];
+    len_buf.copy_from_slice(&plain_bytes[0..4]);
+    let len = u32::from_be_bytes(len_buf) as usize;
+    
+    if len > 1024 || len > (plain_bytes.len() - 4) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "String too long or invalid length"));
+    }
+    
+    String::from_utf8(plain_bytes[4..4+len].to_vec())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }

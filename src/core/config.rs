@@ -3,10 +3,21 @@ use std::fs;
 use std::path::Path;
 use tracing::info;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub peers: Vec<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            peers: Vec::new(),
+            password: Some("sp2p-default-net".to_string()),
+        }
+    }
 }
 
 impl Config {

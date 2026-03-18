@@ -132,6 +132,11 @@ async fn main() {
     let router = Router::new();
     let local_inboxes = Arc::new(LocalInboxes::new());
 
+    // Pre-Shared Group Password / Key derivation
+    let password = config.password.clone().unwrap_or_else(|| "sp2p-default-net".to_string());
+    let crypto_key = Arc::new(crate::core::crypto::derive_key(&password));
+    info!("Network encryption initialized.");
+
     // Setup static peers from config
     for peer in &config.peers {
         if let Ok(ip) = peer.parse::<std::net::IpAddr>() {
@@ -150,10 +155,10 @@ async fn main() {
     watch_inbox_directory(dirs.inbox.clone(), local_inboxes.clone());
 
     // Watch the send folder to dispatch files
-    watch_send_directory(dirs.send.clone(), router.clone());
+    watch_send_directory(dirs.send.clone(), router.clone(), crypto_key.clone());
 
     // 5. Start TCP File Acceptance Server
-    spawn_server(args.port, dirs.inbox.clone());
+    spawn_server(args.port, dirs.inbox.clone(), crypto_key.clone());
 
     // Generate a unique instance ID for broadcast loopback avoidance
     let instance_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -167,8 +172,9 @@ async fn main() {
         args.network.clone(),
         args.no_lan,
         config.peers.clone(),
+        crypto_key.clone()
     );
-    spawn_listener(router.clone(), instance_id, args.network);
+    spawn_listener(router.clone(), instance_id, args.network, crypto_key.clone());
 
     // 7. Request UPnP Port Forwarding async (unless disabled)
     if !args.no_upnp {

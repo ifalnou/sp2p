@@ -85,7 +85,8 @@ fn rescan_send_directory_for_inbox(
     inbox_name: &str,
     send_dir: &std::path::Path,
     router: &Router,
-    in_progress: &Arc<std::sync::Mutex<HashSet<PathBuf>>>
+    in_progress: &Arc<std::sync::Mutex<HashSet<PathBuf>>>,
+    crypto_key: &Arc<[u8; 32]>
 ) {
     let inbox_dir = send_dir.join(inbox_name);
     if !inbox_dir.exists() {
@@ -116,7 +117,8 @@ fn rescan_send_directory_for_inbox(
                                             rel_file_path_str,
                                             router.clone(),
                                             in_progress.clone(),
-                                            send_dir.to_path_buf()
+                                            send_dir.to_path_buf(),
+                                            crypto_key.clone()
                                         );
                                     }
                                 }
@@ -130,7 +132,7 @@ fn rescan_send_directory_for_inbox(
 }
 
 /// Watches the `send` directory. If a file is placed here, we wait for writer lock release and send it.
-pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
+pub fn watch_send_directory(send_dir: PathBuf, router: Router, crypto_key: Arc<[u8; 32]>) {
     let (tx, mut rx) = mpsc::unbounded_channel();
     let mut router_rx = router.subscribe_new_inboxes();
 
@@ -194,7 +196,8 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
                                                 rel_file_path_str,
                                                 router.clone(),
                                                 in_progress.clone(),
-                                                send_dir_clone.clone()
+                                                send_dir_clone.clone(),
+                                                crypto_key.clone()
                                             );
                                         }
                                     }
@@ -209,7 +212,8 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
                         &new_inbox,
                         &send_dir_clone,
                         &router,
-                        &in_progress
+                        &in_progress,
+                        &crypto_key
                     );
                 }
             }
@@ -217,7 +221,7 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
     });
 }
 
-fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>, send_dir: PathBuf) {
+fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>, send_dir: PathBuf, crypto_key: Arc<[u8; 32]>) {
     tokio::spawn(async move {
         // Debounce: Wait until the file is no longer exclusively locked by another process
         let mut retries = 0;
@@ -256,7 +260,7 @@ fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path
         info!("Initiating transfer of {:?} to inbox '{}'", path, inbox_name);
 
         for target in targets {
-            if let Err(e) = send_file(target, inbox_name.clone(), path.clone(), relative_file_path.clone()).await {
+            if let Err(e) = send_file(target, inbox_name.clone(), path.clone(), relative_file_path.clone(), crypto_key.clone()).await {
                 error!("Failed to send to {}: {}", target, e);
             }
         }
