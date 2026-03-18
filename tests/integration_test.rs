@@ -185,8 +185,8 @@ fn test_nested_folder_transfer() {
     let sent_folder_inbox = app1.send_path().join("media_inbox");
     assert!(!sent_folder_inbox.join("photos/summer").exists(), "Empty sub-directory was not removed");
     assert!(!sent_folder_inbox.join("photos").exists(), "Empty parent directory was not removed");
-    // Ensure the root inbox send folder itself is removed if entirely empty
-    assert!(!sent_folder_inbox.exists(), "Empty root send inbox directory was not removed");
+    // Ensure the root inbox send folder itself is PRESERVED even if entirely empty
+    assert!(sent_folder_inbox.exists(), "Empty root send inbox directory was wrongfully removed");
 }
 
 #[test]

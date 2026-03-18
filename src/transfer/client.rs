@@ -27,20 +27,25 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf,
 
     write_encrypted_string(&mut stream, &mut noise, &inbox_name).await?;
     write_encrypted_string(&mut stream, &mut noise, &relative_file_path).await?;
-    
+
     // Encrypt file size (8 bytes)
     let size_bytes = file_size.to_be_bytes();
     write_noise(&mut stream, &mut noise, &size_bytes).await?;
 
     // Send file data in chunks
-    let mut file_buf = [0u8; 64000]; // Max noise payload is ~65519
+    // Use a 4MB buffer to reduce disk read overhead
+    let mut file_buf = vec![0u8; 4 * 1024 * 1024];
+    let mut writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, &mut stream);
+
     loop {
         let n = file.read(&mut file_buf).await?;
         if n == 0 {
             break;
         }
-        write_noise(&mut stream, &mut noise, &file_buf[..n]).await?;
+        write_noise(&mut writer, &mut noise, &file_buf[..n]).await?;
     }
+
+    writer.flush().await?;
 
     info!("Successfully sent {}", relative_file_path);
     Ok(())

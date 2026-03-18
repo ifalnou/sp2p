@@ -167,11 +167,29 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router, crypto_key: Arc<[
             tokio::select! {
                 Some(event) = rx.recv() => {
                     if event.kind.is_create() || event.kind.is_modify() {
+                        let mut all_paths = Vec::new();
                         for path in event.paths {
-                            if !path.is_file() {
-                                continue;
+                            if path.is_dir() {
+                                let mut stack = vec![path];
+                                while let Some(dir) = stack.pop() {
+                                    if let Ok(entries) = std::fs::read_dir(dir) {
+                                        for entry in entries.flatten() {
+                                            if let Ok(file_type) = entry.file_type() {
+                                                if file_type.is_dir() {
+                                                    stack.push(entry.path());
+                                                } else if file_type.is_file() {
+                                                    all_paths.push(entry.path());
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if path.is_file() {
+                                all_paths.push(path);
                             }
+                        }
 
+                        for path in all_paths {
                             // Only react if it's placed inside a subfolder representing an inbox name
                             // e.g., send/bob/document.txt
                             if let Ok(relative_path) = path.strip_prefix(&send_dir_clone) {
@@ -274,8 +292,8 @@ fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path
             // Clean up empty parent directories up to the `send_dir` root
             let mut current_dir = path.parent().map(PathBuf::from);
             while let Some(dir) = current_dir {
-                // Do not delete folders outside or equal to our send_dir root
-                if dir == send_dir {
+                // Do not delete folders outside or equal to our send_dir root, NOR the actual inbox folder inside it
+                if dir == send_dir || dir.parent() == Some(send_dir.as_path()) {
                     break;
                 }
 

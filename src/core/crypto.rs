@@ -11,19 +11,19 @@ use chacha20poly1305::{
 /// deriving a deterministic PSK across a network, the salt is deterministic.
 pub fn derive_key(password: &str) -> [u8; 32] {
     let mut key = [0u8; 32];
-    
+
     // We use a hardcoded domain-separation salt so all peers derive the exact same key.
     let salt_bytes = b"sp2p-network-static-salt";
-    
+
     // Default Argon2id parameters
     let params = Params::default();
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
-    
+
     let password_bytes = password.as_bytes();
-    
+
     argon2.hash_password_into(password_bytes, salt_bytes, &mut key)
         .expect("Argon2 hash failed");
-        
+
     key
 }
 
@@ -31,9 +31,9 @@ pub fn derive_key(password: &str) -> [u8; 32] {
 pub fn encrypt_udp(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng); // 96-bits; 12 bytes
-    
+
     let ciphertext = cipher.encrypt(&nonce, plaintext).map_err(|_| "Encryption failed")?;
-    
+
     let mut combined = Vec::with_capacity(nonce.len() + ciphertext.len());
     combined.extend_from_slice(&nonce);
     combined.extend_from_slice(&ciphertext);
@@ -67,7 +67,7 @@ pub async fn noise_client_handshake<S: AsyncReadExt + AsyncWriteExt + Unpin>(
     let mut noise = builder.psk(0, psk).build_initiator().unwrap();
 
     let mut buf = vec![0u8; 65535];
-    
+
     // -> e
     let len = noise.write_message(&[], &mut buf).unwrap();
     stream.write_u16(len as u16).await?;
@@ -111,9 +111,9 @@ pub async fn write_noise<W: AsyncWriteExt + Unpin>(
     data: &[u8],
 ) -> std::io::Result<()> {
     // Noise max payload is 65535 bytes minus 16 byte MAC, so ~65519 payload max
+    let mut buf = [0u8; 65535];
     for chunk in data.chunks(65000) {
-        let mut buf = vec![0u8; 65535];
-        let len = noise.write_message(chunk, &mut buf).unwrap();
+        let len = noise.write_message(chunk, &mut buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         writer.write_u16(len as u16).await?;
         writer.write_all(&buf[..len]).await?;
     }
@@ -128,11 +128,10 @@ pub async fn read_noise<R: AsyncReadExt + Unpin>(
     let len = reader.read_u16().await? as usize;
     let mut cipher_buf = vec![0u8; len];
     reader.read_exact(&mut cipher_buf).await?;
-    
-    let mut plain_buf = vec![0u8; 65535];
+
+    let mut plain_buf = [0u8; 65535];
     let plain_len = noise.read_message(&cipher_buf, &mut plain_buf)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        
-    plain_buf.truncate(plain_len);
-    Ok(plain_buf)
+
+    Ok(plain_buf[..plain_len].to_vec())
 }
