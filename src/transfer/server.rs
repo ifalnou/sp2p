@@ -40,6 +40,12 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
                             Err(e) => { error!("Failed to read file name: {}", e); return; }
                         };
 
+                        // Security check: prevent path traversal attacks
+                        if file_name.contains("..") {
+                            error!("Invalid file path (path traversal attempt): {}", file_name);
+                            return;
+                        }
+
                         let file_size = match reader.read_u64().await {
                             Ok(s) => s,
                             Err(e) => { error!("Failed to read file size: {}", e); return; }
@@ -56,7 +62,24 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf) {
                             }
                         }
 
-                        let dest_file = dest_dir.join(&file_name);
+                        // Use the file_name (which can be a relative path) to build the dest_file
+                        // Handle windows vs backslashes correctly
+                        #[cfg(windows)]
+                        let safe_file_name = file_name.replace("/", "\\");
+                        #[cfg(not(windows))]
+                        let safe_file_name = file_name.clone();
+
+                        let dest_file = dest_dir.join(&safe_file_name);
+
+                        if let Some(parent) = dest_file.parent() {
+                            if !parent.exists() {
+                                if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                                    error!("Failed to create destination directories: {}", e);
+                                    return;
+                                }
+                            }
+                        }
+
                         info!("Receiving file {} ({} bytes) into {}", file_name, file_size, inbox_name);
 
                         let mut file = match File::create(&dest_file).await {

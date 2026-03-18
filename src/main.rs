@@ -10,6 +10,34 @@ use tokio::sync::mpsc;
 use tray_item::{IconSource, TrayItem};
 use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::{FormatEvent, Writer};
+use tracing_subscriber::fmt::{FmtContext, FormatFields};
+use tracing_subscriber::registry::LookupSpan;
+use tracing::Event;
+
+struct CustomFormatter {
+    name: String,
+}
+
+impl<S, N> FormatEvent<S, N> for CustomFormatter
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        let meta = event.metadata();
+        // Format: [name] LEVEL message...
+        // This drops the timestamp and the target namespace
+        write!(writer, "[{}] {} ", self.name, meta.level())?;
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::System::Console::AllocConsole;
@@ -29,6 +57,14 @@ struct Args {
     /// Enable debug logging and show the console window
     #[arg(short, long)]
     debug: bool,
+
+    /// Instance name for logging (defaults to port if not set)
+    #[arg(short, long)]
+    name: Option<String>,
+
+    /// Network group name to isolate peers (defaults to "default")
+    #[arg(long, default_value = "default")]
+    network: String,
 
     /// TCP port for file transfers (defaults to 9081)
     #[arg(short, long, default_value_t = 9081)]
@@ -58,9 +94,12 @@ async fn main() {
         }
     }
 
+    let instance_name = args.name.unwrap_or_else(|| args.port.to_string());
+
     let env_filter = EnvFilter::new(if args.debug { "debug" } else { "info" });
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
+        .event_format(CustomFormatter { name: instance_name.clone() })
         .init();
 
     info!("Starting sp2p...");
@@ -112,9 +151,12 @@ async fn main() {
     // 5. Start TCP File Acceptance Server
     spawn_server(args.port, dirs.inbox.clone());
 
+    // Generate a unique instance ID for broadcast loopback avoidance
+    let instance_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+
     // 6. Start Discovery (UDP Broadcasts)
-    spawn_broadcaster(local_inboxes, args.port);
-    spawn_listener(router.clone());
+    spawn_broadcaster(local_inboxes.clone(), args.port, instance_id.clone(), instance_name.clone(), args.network.clone());
+    spawn_listener(router.clone(), instance_id, args.network);
 
     // 7. Request UPnP Port Forwarding async (unless disabled)
     if !args.no_upnp {

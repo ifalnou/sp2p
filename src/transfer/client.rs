@@ -5,17 +5,12 @@ use tokio::io::AsyncWriteExt;
 use tokio::fs::File;
 use tracing::info;
 
-pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf) -> std::io::Result<()> {
-    let file_name = match file_path.file_name().and_then(|n| n.to_str()) {
-        Some(n) => n.to_string(),
-        None => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Invalid file name")),
-    };
-
+pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf, relative_file_path: String) -> std::io::Result<()> {
     let mut file = File::open(&file_path).await?;
     let metadata = file.metadata().await?;
     let file_size = metadata.len();
 
-    info!("Connecting to {} to send {} ({} bytes)", addr, file_name, file_size);
+    info!("Connecting to {} to send {} ({} bytes)", addr, relative_file_path, file_size);
     let mut stream = TcpStream::connect(addr).await?;
 
     // Protocol:
@@ -25,13 +20,13 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf)
     // 4. File data
 
     write_string(&mut stream, &inbox_name).await?;
-    write_string(&mut stream, &file_name).await?;
+    write_string(&mut stream, &relative_file_path).await?;
     stream.write_u64(file_size).await?;
 
     // Use tokio::io::copy for fast streaming
     tokio::io::copy(&mut file, &mut stream).await?;
 
-    info!("Successfully sent {}", file_name);
+    info!("Successfully sent {}", relative_file_path);
     Ok(())
 }
 

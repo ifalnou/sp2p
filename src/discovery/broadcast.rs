@@ -12,12 +12,15 @@ const BROADCAST_PORT: u16 = 9082;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct AnnouncePayload {
+    instance_id: String,
+    name: String,
+    network: String,
     tcp_port: u16,
     inboxes: Vec<String>,
 }
 
 /// Spawns a background task that periodically broadcasts our local inboxes to the LAN
-pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16) {
+pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16, instance_id: String, instance_name: String, my_network: String) {
     tokio::spawn(async move {
         // We use standard socket for sending broadcast
         let socket = match UdpSocket::bind("0.0.0.0:0").await {
@@ -48,6 +51,9 @@ pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16) {
                 .collect();
 
             let payload = AnnouncePayload {
+                instance_id: instance_id.clone(),
+                name: instance_name.clone(),
+                network: my_network.clone(),
                 tcp_port: my_tcp_port,
                 inboxes
             };
@@ -62,7 +68,7 @@ pub fn spawn_broadcaster(local_inboxes: Arc<LocalInboxes>, my_tcp_port: u16) {
 }
 
 /// Spawns a listener that receives LAN broadcasts and updates the Router
-pub fn spawn_listener(router: Router) {
+pub fn spawn_listener(router: Router, my_instance_id: String, my_network: String) {
     tokio::spawn(async move {
         // Use socket2 to enable SO_REUSEADDR so multiple local processes can bind to the same UDP port
         let socket = match Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)) {
@@ -100,11 +106,21 @@ pub fn spawn_listener(router: Router) {
             match socket.recv_from(&mut buf).await {
                 Ok((len, addr)) => {
                     if let Ok(payload) = serde_json::from_slice::<AnnouncePayload>(&buf[..len]) {
+                        // Ignore our own broadcasts
+                        if payload.instance_id == my_instance_id {
+                            continue;
+                        }
+
+                        // Ignore broadcasts from other network groups
+                        if payload.network != my_network {
+                            continue;
+                        }
+
                         // Construct the peer's actual TCP socket address
                         let mut peer_addr = addr;
                         peer_addr.set_port(payload.tcp_port);
 
-                        router.update_peer_inboxes(peer_addr, payload.inboxes);
+                        router.update_peer_inboxes(peer_addr, payload.name, payload.inboxes);
                     }
                 }
                 Err(e) => {

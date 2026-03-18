@@ -80,9 +80,58 @@ pub fn watch_inbox_directory(inbox_dir: PathBuf, local_inboxes: Arc<LocalInboxes
     });
 }
 
+/// Scans the `send/{inbox_name}` directory for any files that might have been dropped while the peer was offline
+fn rescan_send_directory_for_inbox(
+    inbox_name: &str,
+    send_dir: &std::path::Path,
+    router: &Router,
+    in_progress: &Arc<std::sync::Mutex<HashSet<PathBuf>>>
+) {
+    let inbox_dir = send_dir.join(inbox_name);
+    if !inbox_dir.exists() {
+        return;
+    }
+
+    let mut stack = vec![inbox_dir.clone()];
+    while let Some(dir) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Ok(file_type) = entry.file_type() {
+                    let path = entry.path();
+                    if file_type.is_dir() {
+                        stack.push(path);
+                    } else if file_type.is_file() {
+                        if let Ok(relative_path) = path.strip_prefix(send_dir) {
+                            let mut components = relative_path.components();
+                            if let Some(_inbox_component) = components.next() {
+                                let rel_file_path: PathBuf = components.collect();
+                                if !rel_file_path.as_os_str().is_empty() {
+                                    let mut set = in_progress.lock().unwrap();
+                                    if !set.contains(&path) {
+                                        set.insert(path.clone());
+                                        let rel_file_path_str = rel_file_path.to_string_lossy().replace("\\", "/");
+                                        handle_new_file_to_send(
+                                            path.clone(),
+                                            inbox_name.to_string(),
+                                            rel_file_path_str,
+                                            router.clone(),
+                                            in_progress.clone()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Watches the `send` directory. If a file is placed here, we wait for writer lock release and send it.
 pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
     let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut router_rx = router.subscribe_new_inboxes();
 
     let send_dir_clone_for_watcher = send_dir.clone();
     // Setup file watcher using notify for the `send` dir recursively
@@ -107,40 +156,66 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
     let in_progress = Arc::new(std::sync::Mutex::new(HashSet::new()));
 
     tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            if event.kind.is_create() || event.kind.is_modify() {
-                for path in event.paths {
-                    if !path.is_file() {
-                        continue;
-                    }
+        // Run an initial rescan over all current peers known just in case
+        // Some might have already been discovered before this watcher spawned
+        // But since we just started, usually it's empty. We let router events trigger rescans.
 
-                    // Only react if it's placed inside a subfolder representing an inbox name
-                    // e.g., send/bob/document.txt
-                    if let Some(parent) = path.parent() {
-                        if parent != send_dir_clone {
-                            if let Some(inbox_os_str) = parent.file_name() {
-                                if let Some(inbox_name) = inbox_os_str.to_str() {
-                                    let mut set = in_progress.lock().unwrap();
-                                    if !set.contains(&path) {
-                                        set.insert(path.clone());
-                                        handle_new_file_to_send(
-                                            path.clone(),
-                                            inbox_name.to_string(),
-                                            router.clone(),
-                                            in_progress.clone()
-                                        );
+        loop {
+            tokio::select! {
+                Some(event) = rx.recv() => {
+                    if event.kind.is_create() || event.kind.is_modify() {
+                        for path in event.paths {
+                            if !path.is_file() {
+                                continue;
+                            }
+
+                            // Only react if it's placed inside a subfolder representing an inbox name
+                            // e.g., send/bob/document.txt
+                            if let Ok(relative_path) = path.strip_prefix(&send_dir_clone) {
+                                let mut components = relative_path.components();
+                                if let Some(inbox_component) = components.next() {
+                                    let rel_file_path: PathBuf = components.collect();
+                                    // If there are no more components, it means the file is directly under `send/`
+                                    if rel_file_path.as_os_str().is_empty() {
+                                        continue;
+                                    }
+                                    if let Some(inbox_name) = inbox_component.as_os_str().to_str() {
+                                        let mut set = in_progress.lock().unwrap();
+                                        if !set.contains(&path) {
+                                            set.insert(path.clone());
+
+                                            // Normalize the relative path to use '/'
+                                            let rel_file_path_str = rel_file_path.to_string_lossy().replace("\\", "/");
+
+                                            handle_new_file_to_send(
+                                                path.clone(),
+                                                inbox_name.to_string(),
+                                                rel_file_path_str,
+                                                router.clone(),
+                                                in_progress.clone()
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                Ok(new_inbox) = router_rx.recv() => {
+                    debug!("Rescanning send directory for newly discovered inbox: {}", new_inbox);
+                    rescan_send_directory_for_inbox(
+                        &new_inbox,
+                        &send_dir_clone,
+                        &router,
+                        &in_progress
+                    );
+                }
             }
         }
     });
 }
 
-fn handle_new_file_to_send(path: PathBuf, inbox_name: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>) {
+fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>) {
     tokio::spawn(async move {
         // Debounce: Wait until the file is no longer exclusively locked by another process
         let mut retries = 0;
@@ -179,7 +254,7 @@ fn handle_new_file_to_send(path: PathBuf, inbox_name: String, router: Router, in
         info!("Initiating transfer of {:?} to inbox '{}'", path, inbox_name);
 
         for target in targets {
-            if let Err(e) = send_file(target, inbox_name.clone(), path.clone()).await {
+            if let Err(e) = send_file(target, inbox_name.clone(), path.clone(), relative_file_path.clone()).await {
                 error!("Failed to send to {}: {}", target, e);
             }
         }
