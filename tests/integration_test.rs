@@ -166,6 +166,13 @@ fn test_nested_folder_transfer() {
 
     let content = fs::read_to_string(&received_file).unwrap();
     assert_eq!(content, "JPEG Data", "File content mismatch for nested file");
+
+    // Check if the source nested directories were cleaned up cleanly
+    let sent_folder_inbox = app1.send_path().join("media_inbox");
+    assert!(!sent_folder_inbox.join("photos/summer").exists(), "Empty sub-directory was not removed");
+    assert!(!sent_folder_inbox.join("photos").exists(), "Empty parent directory was not removed");
+    // Ensure the root inbox send folder itself is removed if entirely empty
+    assert!(!sent_folder_inbox.exists(), "Empty root send inbox directory was not removed");
 }
 
 #[test]

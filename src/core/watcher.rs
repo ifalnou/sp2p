@@ -115,7 +115,8 @@ fn rescan_send_directory_for_inbox(
                                             inbox_name.to_string(),
                                             rel_file_path_str,
                                             router.clone(),
-                                            in_progress.clone()
+                                            in_progress.clone(),
+                                            send_dir.to_path_buf()
                                         );
                                     }
                                 }
@@ -192,7 +193,8 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
                                                 inbox_name.to_string(),
                                                 rel_file_path_str,
                                                 router.clone(),
-                                                in_progress.clone()
+                                                in_progress.clone(),
+                                                send_dir_clone.clone()
                                             );
                                         }
                                     }
@@ -215,7 +217,7 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router) {
     });
 }
 
-fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>) {
+fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path: String, router: Router, in_progress: Arc<std::sync::Mutex<HashSet<PathBuf>>>, send_dir: PathBuf) {
     tokio::spawn(async move {
         // Debounce: Wait until the file is no longer exclusively locked by another process
         let mut retries = 0;
@@ -264,6 +266,22 @@ fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path
             error!("Failed to clean up sent file {:?}: {}", path, e);
         } else {
             info!("Cleaned up {:?}", path);
+
+            // Clean up empty parent directories up to the `send_dir` root
+            let mut current_dir = path.parent().map(PathBuf::from);
+            while let Some(dir) = current_dir {
+                // Do not delete folders outside or equal to our send_dir root
+                if dir == send_dir {
+                    break;
+                }
+
+                // Attempt to remove the directory. This safely fails if the dir is not empty.
+                if std::fs::remove_dir(&dir).is_err() {
+                    break;
+                }
+
+                current_dir = dir.parent().map(PathBuf::from);
+            }
         }
 
         // Finally, remove from in-progress tracking
