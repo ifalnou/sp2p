@@ -13,6 +13,8 @@ No sign-ups, no central servers, and no complicated setups.
 - **UPnP / Port Forwarding**: Automatically maps the necessary ports on your router to allow sending and receiving files across the internet.
 - **WAN & Off-Grid Settings**: Explicitly list IP addresses in `config.toml` to connect directly outside your LAN, or disable LAN discovery altogether via command-line arguments.
 - **Background Execution**: Sits quietly in the Windows System Tray with near-zero CPU footprint. No persistent terminal required.
+- **Dashboard & Notifications**: Includes a native interface accessible from the tray to view real-time progress, transfer history, and toggle Windows auto-start. Integrated OS toast notifications gracefully alert you to new file arrivals.
+- **Resumable & Verified Transfers**: Implements offset tracking to seamlessly resume interrupted large downloads. Ensures bit-perfect data integrity using ultra-fast BLAKE3 hashing.
 - **Conflict Resolution**: Files sent to an inbox category claimed by multiple peers will transfer to all matched network endpoints.
 
 ## Installation
@@ -74,4 +76,4 @@ cargo build --release
 
 ## Roadmap
 
-Check out the [ROADMAP.md](ROADMAP.md) for details on current progress and future objectives like End-to-End Encryption, Chunking, and OS notification alerts.
+Check out the [ROADMAP.md](ROADMAP.md) for details on current progress and future objectives like advanced NAT Traversal and WAN routing.

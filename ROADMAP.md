@@ -77,18 +77,18 @@ The application manages a root directory (e.g., alongside the executable):
 - [x] **Stateless Payload Encryption:** UDP discovery blasts are entirely wrapped and nonced using `ChaCha20Poly1305`.
 - [x] **Network Group Passwords:** Seamless Pre-Shared Keys generated from user passwords via `Argon2`. Unauthenticated noise is aggressively dropped.
 
+### Phase 6: User Experience (UX) - *Completed*
+- [x] **OS Notifications:** Integrate desktop toast notifications (`notify-rust`) intelligently grouped to alert the user when files successfully arrive in their inbox.
+- [x] **Lightweight Native UI / Progress:** Created a native `egui` window accessible from the System Tray to display real-time progress bars for active transfers, history, and settings (Auto-start Windows registry hooking).
+
+### Phase 7: Reliability & Large Files - *Completed*
+- [x] **Chunking & Resume Support:** Instead of restarting dropped transfers from 0%, allow peers to negotiate file offsets and resume appending to partially downloaded data (crucial for large transfers).
+- [x] **File Hash Integrity:** Calculate a fast hash (`BLAKE3`) during transfer and verify it at the end to guarantee data isn't corrupted over the wire.
+*Note: Intentional omission of bandwidth limiting. The design philosophy favors keeping it simple and always utilizing the maximum available bandwidth.*
+
 ## 5. Future Improvements & Next Steps
 
 Based on initial testing and usage, the following features have been identified as high-value for future iterations:
 
-### 5.1 Reliability & Large Files
-- **Chunking & Resume Support:** Instead of restarting dropped transfers from 0%, allow peers to negotiate file offsets and resume appending to partially downloaded data (crucial for large transfers).
-- **File Hash Integrity:** Calculate a fast hash (e.g., `BLAKE3`) during transfer and verify it at the end to guarantee data isn't corrupted over the wire.
-*Note: Intentional omission of bandwidth limiting. The design philosophy favors keeping it simple and always utilizing the maximum available bandwidth.*
-
-### 5.2 User Experience (UX)
-- **OS Notifications (Must Have!):** Integrate desktop toast notifications (e.g., via `notify-rust` or native Windows APIs) to alert the user when a new file successfully arrives in their inbox.
-- **Lightweight Native UI / Progress:** Keep the background-first service philosophy, but introduce a small native UI window (accessible from the System Tray) to display real-time progress bars for large transfers, active peers, and recent transfer history.
-
-### 5.3 Advanced Networking (Pending Evaluation)
+### 5.1 Advanced Networking (Pending Evaluation)
 - **NAT Traversal (Hole Punching) & Relay Fallback:** Deferred for now. UPnP covers basic WAN scenarios. If extended usage and testing indicate strict NAT/UPnP failure is a common bottleneck, STUN/TURN based UDP hole punching or fallback relays will be reconsidered.
