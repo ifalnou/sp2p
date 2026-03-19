@@ -277,33 +277,39 @@ fn handle_new_file_to_send(path: PathBuf, inbox_name: String, relative_file_path
 
         info!("Initiating transfer of {:?} to inbox '{}'", path, inbox_name);
 
+        let mut all_success = true;
         for target in targets {
             if let Err(e) = send_file(target, inbox_name.clone(), path.clone(), relative_file_path.clone(), crypto_key.clone()).await {
                 error!("Failed to send to {}: {}", target, e);
+                all_success = false;
             }
         }
 
-        // Cleanup: Once sending attempt is complete, we delete the file
-        if let Err(e) = tokio::fs::remove_file(&path).await {
-            error!("Failed to clean up sent file {:?}: {}", path, e);
-        } else {
-            info!("Cleaned up {:?}", path);
+        if all_success {
+            // Cleanup: Once sending attempt is complete AND SUCCESSFUL, we delete the file
+            if let Err(e) = tokio::fs::remove_file(&path).await {
+                error!("Failed to clean up sent file {:?}: {}", path, e);
+            } else {
+                info!("Cleaned up {:?}", path);
 
-            // Clean up empty parent directories up to the `send_dir` root
-            let mut current_dir = path.parent().map(PathBuf::from);
-            while let Some(dir) = current_dir {
-                // Do not delete folders outside or equal to our send_dir root, NOR the actual inbox folder inside it
-                if dir == send_dir || dir.parent() == Some(send_dir.as_path()) {
-                    break;
+                // Clean up empty parent directories up to the `send_dir` root
+                let mut current_dir = path.parent().map(PathBuf::from);
+                while let Some(dir) = current_dir {
+                    // Do not delete folders outside or equal to our send_dir root, NOR the actual inbox folder inside it
+                    if dir == send_dir || dir.parent() == Some(send_dir.as_path()) {
+                        break;
+                    }
+
+                    // Attempt to remove the directory. This safely fails if the dir is not empty.
+                    if std::fs::remove_dir(&dir).is_err() {
+                        break;
+                    }
+
+                    current_dir = dir.parent().map(PathBuf::from);
                 }
-
-                // Attempt to remove the directory. This safely fails if the dir is not empty.
-                if std::fs::remove_dir(&dir).is_err() {
-                    break;
-                }
-
-                current_dir = dir.parent().map(PathBuf::from);
             }
+        } else {
+            error!("Transfer failed for {:?}, retaining file for future attempt", path);
         }
 
         // Finally, remove from in-progress tracking

@@ -303,3 +303,59 @@ fn test_password_mismatch_fails() {
     let received_file = peer2.inbox_path().join("secret_inbox").join("topsecret.txt");
     assert!(!received_file.exists(), "File should not be transferred due to mismatched passwords/keys");
 }
+
+#[test]
+fn test_resume_partial_transfer() {
+    let app1 = AppInstance::new_with_password("Resume Sender", 10105, "resumenet", "pass");
+    let app2 = AppInstance::new_with_password("Resume Receiver", 10106, "resumenet", "pass");
+
+    // Create the receiver inbox
+    app2.create_inbox("big_files");
+    std::thread::sleep(Duration::from_secs(2));
+
+    let inbox_dir = app2.inbox_path().join("big_files");
+    let partial_file_path = inbox_dir.join("ubuntu.iso");
+    std::fs::create_dir_all(&inbox_dir).unwrap();
+
+    let full_content = "This is a very long file that requires resuming properly! 123456789";
+    let partial_content = &full_content[0..20];
+    std::fs::write(&partial_file_path, partial_content).unwrap();
+
+    app1.send_file("big_files", "ubuntu.iso", full_content);
+
+    // Wait for the transfer
+    std::thread::sleep(Duration::from_secs(4));
+
+    let received_content = std::fs::read_to_string(&partial_file_path).unwrap();
+    assert_eq!(received_content, full_content, "The file was not properly resumed / content is mangled: it matched {}", received_content);
+}
+
+#[test]
+fn test_peer_reconnect_retry() {
+    let app1 = AppInstance::new_with_password("Reboot Sender", 10107, "rebootnet", "pass");
+    let initial_app2 = AppInstance::new_with_password("Reboot Receiver", 10108, "rebootnet", "pass");
+
+    initial_app2.create_inbox("retry_box");
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Forcefully stop the receiver safely via simulating dropping it before transfer completes
+    drop(initial_app2);
+
+    // Queue file when peer is practically offline (the port closed/dead)
+    app1.send_file("retry_box", "will_retry.txt", "Some content that missed the boat");
+    std::thread::sleep(Duration::from_secs(2)); // wait for it to inherently fail
+
+    // Start instance 2 again exactly on the same IP constraint, triggering an instance ID replacement broadcast
+    let rebooted_app2 = AppInstance::new_with_password("Reboot Receiver", 10108, "rebootnet", "pass");
+
+    // We must manually reconstruct the AppInstance directories because drop() above wiped out the TempDir for clean testing!
+    // But since it's an AppInstance abstraction that usually automatically wipes dir ... wait AppInstance creates random string TempDirs
+    // If it relies on a different TempDir upon reboot, the test isn't valid for same-ip reconnect, but we can simulate peer discovery!
+    rebooted_app2.create_inbox("retry_box");
+
+    // Wait for the discovery blast to organically re-poll the watcher pipeline!
+    std::thread::sleep(Duration::from_secs(5));
+
+    let received_content = rebooted_app2.inbox_path().join("retry_box").join("will_retry.txt");
+    assert!(received_content.exists(), "Instance 1 did not dynamically retry to send the pinned file upon instance 2 reboot event");
+}

@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 use std::net::SocketAddr;
+use std::io::SeekFrom;
 use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncSeekExt};
 use tokio::fs::File;
 use tracing::info;
 use std::sync::Arc;
 use snow::TransportState;
-use crate::core::crypto::{noise_client_handshake, write_noise};
+use crate::core::crypto::{noise_client_handshake, write_noise, read_noise};
 
 pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf, relative_file_path: String, crypto_key: Arc<[u8; 32]>) -> std::io::Result<()> {
     let mut file = File::open(&file_path).await?;
@@ -32,20 +33,59 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf,
     let size_bytes = file_size.to_be_bytes();
     write_noise(&mut stream, &mut noise, &size_bytes).await?;
 
+    // Read resume offset from Server
+    let offset_bytes = read_noise(&mut stream, &mut noise).await?;
+    if offset_bytes.len() != 8 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid offset length from server"));
+    }
+    let mut ob = [0u8; 8];
+    ob.copy_from_slice(&offset_bytes);
+    let resume_offset = u64::from_be_bytes(ob);
+
+    if resume_offset > file_size {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Server provided invalid resume offset"));
+    }
+
+    if resume_offset > 0 {
+        info!("Resuming transfer of {} from offset {}", relative_file_path, resume_offset);
+        file.seek(SeekFrom::Start(resume_offset)).await?;
+    }
+
     // Send file data in chunks
     // Use a 4MB buffer to reduce disk read overhead
     let mut file_buf = vec![0u8; 4 * 1024 * 1024];
     let mut writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, &mut stream);
 
-    loop {
-        let n = file.read(&mut file_buf).await?;
+    let mut hasher = blake3::Hasher::new();
+    let mut remaining = file_size - resume_offset;
+
+    while remaining > 0 {
+        let to_read = std::cmp::min(remaining, file_buf.len() as u64) as usize;
+        let n = file.read(&mut file_buf[..to_read]).await?;
         if n == 0 {
             break;
         }
         write_noise(&mut writer, &mut noise, &file_buf[..n]).await?;
+        hasher.update(&file_buf[..n]);
+        remaining -= n as u64;
     }
 
+    if remaining > 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "File shrank during transfer"));
+    }
+
+    // Send cryptographic hash of the transferred payload
+    let hash = hasher.finalize();
+    write_noise(&mut writer, &mut noise, hash.as_bytes()).await?;
+
     writer.flush().await?;
+    drop(writer);
+
+    // Wait for ACK
+    let ack = read_noise(&mut stream, &mut noise).await?;
+    if ack.len() != 1 || ack[0] != 1 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "File transfer rejected by server (hash mismatch?)"));
+    }
 
     info!("Successfully sent {}", relative_file_path);
     Ok(())

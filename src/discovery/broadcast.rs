@@ -154,7 +154,7 @@ pub fn spawn_listener(router: Router, my_instance_id: String, my_network: String
                                 let mut peer_addr = addr;
                                 peer_addr.set_port(payload.tcp_port);
 
-                                router.update_peer_inboxes(peer_addr, payload.name, payload.inboxes);
+                                router.update_peer_inboxes(peer_addr, payload.instance_id, payload.name, payload.inboxes);
                             }
                         }
                         Err(_) => {

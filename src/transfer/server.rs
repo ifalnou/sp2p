@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 use tokio::io::{BufReader, AsyncWriteExt};
-use tokio::fs::File;
+use tokio::io::AsyncSeekExt;
+use crate::core::crypto::write_noise;
 use tracing::{error, info, debug};
 use std::sync::Arc;
 use snow::TransportState;
@@ -97,24 +98,62 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
                             }
                         }
 
-                        info!("Receiving file {} ({} bytes) into {}", file_name, file_size, inbox_name);
+                        let mut existing_size = 0u64;
+                        if dest_file.exists() {
+                            if let Ok(meta) = tokio::fs::metadata(&dest_file).await {
+                                let len = meta.len();
+                                if len <= file_size {
+                                    existing_size = len;
+                                }
+                            }
+                        }
 
-                        let file = match File::create(&dest_file).await {
+                        if existing_size > 0 {
+                            info!("Resuming {} from {} bytes (total {} bytes)", file_name, existing_size, file_size);
+                        } else {
+                            info!("Receiving file {} ({} bytes) into {}", file_name, file_size, inbox_name);
+                        }
+
+                        let mut file = match tokio::fs::OpenOptions::new()
+                            .create(true)
+                            .write(true)
+                            .open(&dest_file).await {
                             Ok(f) => f,
-                            Err(e) => { error!("Failed to create local file {:?}: {}", dest_file, e); return; }
+                            Err(e) => { error!("Failed to open/create local file {:?}: {}", dest_file, e); return; }
                         };
 
-                        let mut file_writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, file);
+                        if existing_size == 0 {
+                            if let Err(e) = file.set_len(0).await {
+                                error!("Failed to truncate file: {}", e); return;
+                            }
+                        }
+                        if let Err(e) = file.seek(tokio::io::SeekFrom::Start(existing_size)).await {
+                            error!("Failed to seek local file: {}", e); return;
+                        }
 
-                        let mut bytes_copied = 0;
-                        while bytes_copied < file_size {
+                        // Send offset back to client
+                        if let Err(e) = write_noise(reader.get_mut(), &mut noise, &existing_size.to_be_bytes()).await {
+                            error!("Failed to send resume offset: {}", e); return;
+                        }
+
+                        let mut file_writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, file);
+                        let mut hasher = blake3::Hasher::new();
+                        let expected_bytes = file_size - existing_size;
+                        let mut bytes_copied = 0u64;
+
+                        while bytes_copied < expected_bytes {
                             match read_noise(&mut reader, &mut noise).await {
                                 Ok(data) => {
                                     if let Err(e) = file_writer.write_all(&data).await {
                                         error!("Failed to write to disk: {}", e);
                                         return;
                                     }
+                                    hasher.update(&data);
                                     bytes_copied += data.len() as u64;
+                                    if bytes_copied > expected_bytes {
+                                        error!("Received more bytes than expected");
+                                        return;
+                                    }
                                 }
                                 Err(e) => {
                                     error!("Connection closed or corrupted transfer: {}", e);
@@ -123,10 +162,25 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
                             }
                         }
 
+                        let client_hash = match read_noise(&mut reader, &mut noise).await {
+                            Ok(h) => h,
+                            Err(e) => { error!("Failed to read hash block: {}", e); return; }
+                        };
+
+                        let my_hash = hasher.finalize();
+                        if client_hash != my_hash.as_bytes() {
+                            error!("Payload hash mismatch for {}! Corrupted transfer.", file_name);
+                            let _ = write_noise(reader.get_mut(), &mut noise, &[0]).await;
+                            return;
+                        }
+
                         if let Err(e) = file_writer.flush().await {
                             error!("Failed to flush file to disk: {}", e);
                             return;
                         }
+
+                        // Send ACK
+                        let _ = write_noise(reader.get_mut(), &mut noise, &[1]).await;
 
                         info!("Successfully received {} from {}", file_name, addr);
                     });
