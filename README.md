@@ -8,6 +8,7 @@ No sign-ups, no central servers, and no complicated setups.
 
 - **"Files as API"**: Intuitive mechanics. Copy files to a `send/<category>` folder, and they automatically appear in the peer's `inbox/<category>` folder.
 - **Zero-Config Discovery**: Uses local network UDP broadcast to naturally discover peers.
+- **End-to-End Encryption (E2EE)**: Zero-config network encryption (Noise Protocol for TCP transfers, nonced ChaCha20Poly1305 for UDP discovery). Secured by a shared `password` via Argon2 key derivation. Untrusted connections are categorically isolated.
 - **Nested Folder Mapping**: Transfers preserve folder hierarchy, perfectly mirroring your nested directories on the target peer.
 - **UPnP / Port Forwarding**: Automatically maps the necessary ports on your router to allow sending and receiving files across the internet.
 - **WAN & Off-Grid Settings**: Explicitly list IP addresses in `config.toml` to connect directly outside your LAN, or disable LAN discovery altogether via command-line arguments.
@@ -52,9 +53,13 @@ OPTIONS:
 
 ## Configuration
 
-A `config.toml` will be automatically generated upon your first launch. It allows you to specify explicit IPs for reaching peers globally or across complicated subnets where UDP broadcasts fail.
+A `config.toml` will be automatically generated upon your first launch. It allows you to specify explicit IPs for reaching peers globally or across complicated subnets where UDP broadcasts fail, and establish the E2EE password.
 
 ```toml
+# Network password used for Pre-Shared Key Derivation (E2EE)
+# All peers sharing files must have this matching password
+password = "my-secret-password"
+
 # Explicit manual targets (useful for WAN endpoints or remote machines)
 peers = [
     "11.22.33.44"
