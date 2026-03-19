@@ -28,6 +28,9 @@ lazy_static = "1.5.0"
 crossbeam-channel = "0.5.13"
 winit = "0.30"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52.0"
+
 [build-dependencies]
 winres = "0.1.12"
 
