@@ -8,6 +8,8 @@ use tracing::info;
 use std::sync::Arc;
 use snow::TransportState;
 use crate::core::crypto::{noise_client_handshake, write_noise, read_noise};
+use crate::core::state::{GLOBAL_STATE, ActiveTransfer, TransferHistoryItem};
+use std::time::SystemTime;
 
 pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf, relative_file_path: String, crypto_key: Arc<[u8; 32]>) -> std::io::Result<()> {
     let mut file = File::open(&file_path).await?;
@@ -51,6 +53,18 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf,
         file.seek(SeekFrom::Start(resume_offset)).await?;
     }
 
+    let transfer_id = format!("{}-{}", addr, relative_file_path);
+    {
+        let mut state = GLOBAL_STATE.write().unwrap();
+        state.active_transfers.push(ActiveTransfer {
+            id: transfer_id.clone(),
+            filename: relative_file_path.clone(),
+            bytes_transferred: resume_offset,
+            total_bytes: file_size,
+            is_sending: true,
+        });
+    }
+
     // Send file data in chunks
     // Use a 4MB buffer to reduce disk read overhead
     let mut file_buf = vec![0u8; 4 * 1024 * 1024];
@@ -68,6 +82,12 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf,
         write_noise(&mut writer, &mut noise, &file_buf[..n]).await?;
         hasher.update(&file_buf[..n]);
         remaining -= n as u64;
+
+        if let Ok(mut state) = GLOBAL_STATE.write() {
+            if let Some(t) = state.active_transfers.iter_mut().find(|t| t.id == transfer_id) {
+                t.bytes_transferred = file_size - remaining;
+            }
+        }
     }
 
     if remaining > 0 {
@@ -84,10 +104,32 @@ pub async fn send_file(addr: SocketAddr, inbox_name: String, file_path: PathBuf,
     // Wait for ACK
     let ack = read_noise(&mut stream, &mut noise).await?;
     if ack.len() != 1 || ack[0] != 1 {
+        // Record failure
+        if let Ok(mut state) = GLOBAL_STATE.write() {
+            state.active_transfers.retain(|t| t.id != transfer_id);
+            state.history.push(TransferHistoryItem {
+                filename: relative_file_path.clone(),
+                is_sending: true,
+                success: false,
+                timestamp: SystemTime::now(),
+            });
+        }
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "File transfer rejected by server (hash mismatch?)"));
     }
 
-    info!("Successfully sent {}", relative_file_path);
+    info!("Sent file {} successfully", relative_file_path);
+
+    // Record success
+    if let Ok(mut state) = GLOBAL_STATE.write() {
+        state.active_transfers.retain(|t| t.id != transfer_id);
+        state.history.push(TransferHistoryItem {
+            filename: relative_file_path.clone(),
+            is_sending: true,
+            success: true,
+            timestamp: SystemTime::now(),
+        });
+    }
+
     Ok(())
 }
 

@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "cargo check": true,
+        "cargo test": true,
+        "cargo fix": true,
+        "awk": true
+    }
+}

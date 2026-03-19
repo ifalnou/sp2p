@@ -22,6 +22,11 @@ chacha20poly1305 = "0.10"
 argon2 = "0.5"
 rand = "0.8"
 blake3 = "1.8.3"
+eframe = "0.29.0"
+notify-rust = "4.11.3"
+lazy_static = "1.5.0"
+crossbeam-channel = "0.5.13"
+winit = "0.30"
 
 [build-dependencies]
 winres = "0.1.12"

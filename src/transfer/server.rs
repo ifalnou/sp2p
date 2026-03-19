@@ -7,8 +7,12 @@ use tracing::{error, info, debug};
 use std::sync::Arc;
 use snow::TransportState;
 use crate::core::crypto::{noise_server_handshake, read_noise};
+use crate::core::notifications::FileReceivedEvent;
+use crate::core::state::{GLOBAL_STATE, ActiveTransfer, TransferHistoryItem};
+use tokio::sync::mpsc;
+use std::time::SystemTime;
 
-pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
+pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>, notify_tx: mpsc::UnboundedSender<FileReceivedEvent>) {
     tokio::spawn(async move {
         let listener = match TcpListener::bind(("0.0.0.0", port)).await {
             Ok(l) => l,
@@ -25,6 +29,7 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
                 Ok((mut socket, addr)) => {
                     let root = inbox_root.clone();
                     let psk = crypto_key.clone();
+                    let notif_tx = notify_tx.clone();
 
                     tokio::spawn(async move {
                         debug!("Accepted connection from {}", addr);
@@ -136,6 +141,18 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
                             error!("Failed to send resume offset: {}", e); return;
                         }
 
+                        let transfer_id = format!("{}-{}", addr, file_name);
+                        {
+                            let mut state = GLOBAL_STATE.write().unwrap();
+                            state.active_transfers.push(ActiveTransfer {
+                                id: transfer_id.clone(),
+                                filename: file_name.clone(),
+                                bytes_transferred: existing_size,
+                                total_bytes: file_size,
+                                is_sending: false,
+                            });
+                        }
+
                         let mut file_writer = tokio::io::BufWriter::with_capacity(4 * 1024 * 1024, file);
                         let mut hasher = blake3::Hasher::new();
                         let expected_bytes = file_size - existing_size;
@@ -150,6 +167,13 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
                                     }
                                     hasher.update(&data);
                                     bytes_copied += data.len() as u64;
+
+                                    if let Ok(mut state) = GLOBAL_STATE.write() {
+                                        if let Some(t) = state.active_transfers.iter_mut().find(|t| t.id == transfer_id) {
+                                            t.bytes_transferred = existing_size + bytes_copied;
+                                        }
+                                    }
+
                                     if bytes_copied > expected_bytes {
                                         error!("Received more bytes than expected");
                                         return;
@@ -181,6 +205,22 @@ pub fn spawn_server(port: u16, inbox_root: PathBuf, crypto_key: Arc<[u8; 32]>) {
 
                         // Send ACK
                         let _ = write_noise(reader.get_mut(), &mut noise, &[1]).await;
+
+                        {
+                            let mut state = GLOBAL_STATE.write().unwrap();
+                            state.active_transfers.retain(|t| t.id != transfer_id);
+                            state.history.push(TransferHistoryItem {
+                                filename: file_name.clone(),
+                                is_sending: false,
+                                success: true,
+                                timestamp: SystemTime::now(),
+                            });
+                        }
+
+                        let _ = notif_tx.send(FileReceivedEvent {
+                            inbox_name: inbox_name.clone(),
+                            relative_path: safe_file_name.clone(),
+                        });
 
                         info!("Successfully received {} from {}", file_name, addr);
                     });

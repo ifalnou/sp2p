@@ -3,6 +3,7 @@
 mod core;
 mod discovery;
 mod transfer;
+mod ui;
 
 use clap::Parser;
 use std::sync::Arc;
@@ -157,8 +158,11 @@ async fn main() {
     // Watch the send folder to dispatch files
     watch_send_directory(dirs.send.clone(), router.clone(), crypto_key.clone());
 
-    // 5. Start TCP File Acceptance Server
-    spawn_server(args.port, dirs.inbox.clone(), crypto_key.clone());
+    // 5. Start Notifications
+    let notify_tx = crate::core::notifications::spawn_notification_debouncer();
+
+    // 6. Start TCP File Acceptance Server
+    spawn_server(args.port, dirs.inbox.clone(), crypto_key.clone(), notify_tx);
 
     // Generate a unique instance ID for broadcast loopback avoidance
     let instance_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
@@ -188,6 +192,10 @@ async fn main() {
     let _tray = if !args.no_tray {
         match TrayItem::new("sp2p", IconSource::Resource("app-icon")) {
             Ok(mut tray) => {
+                tray.add_menu_item("Dashboard", move || {
+                    crate::ui::dashboard::spawn_dashboard();
+                }).unwrap_or_else(|e| tracing::warn!("Failed to add Dashboard menu: {}", e));
+
                 let quit_tx = tx.clone();
                 tray.add_menu_item("Quit", move || {
                     let _ = quit_tx.send(());
