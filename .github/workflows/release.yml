@@ -52,7 +52,7 @@ jobs:
           echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
 
       - name: Build MSI Installer
-        run: cargo wix --nocapture -v -C "-ext" -C "WixUtilExtension"
+        run: cargo wix --nocapture -v
 
       - name: Package Release
         shell: pwsh
