@@ -88,7 +88,7 @@
             Id='Closesp2p'
             Target='sp2p.exe'
             TerminateProcess='0'
-            Timeout='0'
+            Timeout='1'
             RebootPrompt='no'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
