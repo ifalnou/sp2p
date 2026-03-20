@@ -8,7 +8,7 @@ mod ui;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, Event};
+use tracing::{error, info, Event};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::{FormatEvent, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormatFields};
@@ -135,15 +135,6 @@ async fn main() {
     let password = config.password.clone().unwrap_or_else(|| "sp2p-default-net".to_string());
     let crypto_key = Arc::new(crate::core::crypto::derive_key(&password));
     info!("Network encryption initialized.");
-
-    // Setup static peers from config
-    for peer in &config.peers {
-        if let Ok(ip) = peer.parse::<std::net::IpAddr>() {
-            // Static peers can be pre-seeded, or we might need to actively poll them.
-            // For now, they are just parsed. They will be integrated in TCP logic.
-            debug!("Loaded static peer: {}", ip);
-        }
-    }
 
     // 4. Start Core Modules
 

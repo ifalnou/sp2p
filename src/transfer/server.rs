@@ -72,7 +72,11 @@ async fn handle_connection(
         Err(e) => { error!("Failed to read file name: {}", e); return; }
     };
 
-    // Security: prevent path traversal attacks
+    // Security: prevent path traversal attacks on both inbox name and file name
+    if inbox_name.contains("..") || inbox_name.contains('/') || inbox_name.contains('\\') {
+        error!("Invalid inbox name (path traversal attempt): {}", inbox_name);
+        return;
+    }
     if file_name.contains("..") {
         error!("Invalid file path (path traversal attempt): {}", file_name);
         return;
@@ -171,53 +175,56 @@ async fn handle_connection(
     let expected_bytes = file_size - existing_size;
     let mut bytes_copied = 0u64;
 
-    while bytes_copied < expected_bytes {
-        match read_noise(&mut reader, &mut noise).await {
-            Ok(data) => {
-                if let Err(e) = file_writer.write_all(&data).await {
-                    error!("Failed to write to disk: {}", e);
-                    return;
-                }
-                hasher.update(&data);
-                bytes_copied += data.len() as u64;
+    let success = 'transfer: {
+        while bytes_copied < expected_bytes {
+            match read_noise(&mut reader, &mut noise).await {
+                Ok(data) => {
+                    if let Err(e) = file_writer.write_all(&data).await {
+                        error!("Failed to write to disk: {}", e);
+                        break 'transfer false;
+                    }
+                    hasher.update(&data);
+                    bytes_copied += data.len() as u64;
 
-                if let Ok(mut state) = GLOBAL_STATE.write() {
-                    if let Some(t) = state.active_transfers.iter_mut().find(|t| t.id == transfer_id) {
-                        t.bytes_transferred = existing_size + bytes_copied;
+                    if let Ok(mut state) = GLOBAL_STATE.write() {
+                        if let Some(t) = state.active_transfers.iter_mut().find(|t| t.id == transfer_id) {
+                            t.bytes_transferred = existing_size + bytes_copied;
+                        }
+                    }
+
+                    if bytes_copied > expected_bytes {
+                        error!("Received more bytes than expected");
+                        break 'transfer false;
                     }
                 }
-
-                if bytes_copied > expected_bytes {
-                    error!("Received more bytes than expected");
-                    return;
+                Err(e) => {
+                    error!("Connection closed or corrupted transfer: {}", e);
+                    break 'transfer false;
                 }
             }
-            Err(e) => {
-                error!("Connection closed or corrupted transfer: {}", e);
-                return;
-            }
         }
-    }
 
-    let client_hash = match read_noise(&mut reader, &mut noise).await {
-        Ok(h) => h,
-        Err(e) => { error!("Failed to read hash block: {}", e); return; }
+        let client_hash = match read_noise(&mut reader, &mut noise).await {
+            Ok(h) => h,
+            Err(e) => { error!("Failed to read hash block: {}", e); break 'transfer false; }
+        };
+
+        let my_hash = hasher.finalize();
+        if client_hash != my_hash.as_bytes() {
+            error!("Payload hash mismatch for {}! Corrupted transfer.", file_name);
+            let _ = write_noise(reader.get_mut(), &mut noise, &[0]).await;
+            break 'transfer false;
+        }
+
+        if let Err(e) = file_writer.flush().await {
+            error!("Failed to flush file to disk: {}", e);
+            break 'transfer false;
+        }
+
+        // Send ACK
+        let _ = write_noise(reader.get_mut(), &mut noise, &[1]).await;
+        true
     };
-
-    let my_hash = hasher.finalize();
-    if client_hash != my_hash.as_bytes() {
-        error!("Payload hash mismatch for {}! Corrupted transfer.", file_name);
-        let _ = write_noise(reader.get_mut(), &mut noise, &[0]).await;
-        return;
-    }
-
-    if let Err(e) = file_writer.flush().await {
-        error!("Failed to flush file to disk: {}", e);
-        return;
-    }
-
-    // Send ACK
-    let _ = write_noise(reader.get_mut(), &mut noise, &[1]).await;
 
     {
         let mut state = GLOBAL_STATE.write().unwrap();
@@ -225,17 +232,18 @@ async fn handle_connection(
         state.history.push(TransferHistoryItem {
             filename: file_name.clone(),
             is_sending: false,
-            success: true,
+            success,
             timestamp: SystemTime::now(),
         });
     }
 
-    let _ = notify_tx.send(FileReceivedEvent {
-        inbox_name: inbox_name.clone(),
-        relative_path: safe_file_name.clone(),
-    });
-
-    info!("Successfully received {} from {}", file_name, addr);
+    if success {
+        let _ = notify_tx.send(FileReceivedEvent {
+            inbox_name: inbox_name.clone(),
+            relative_path: safe_file_name.clone(),
+        });
+        info!("Successfully received {} from {}", file_name, addr);
+    }
 }
 
 async fn read_encrypted_string<R: tokio::io::AsyncRead + Unpin>(

@@ -31,6 +31,12 @@ pub fn spawn_broadcaster(
     explicit_peers: Vec<String>,
     crypto_key: Arc<[u8; 32]>
 ) {
+    // Parse explicit peer addresses once at startup
+    let explicit_addrs: Vec<SocketAddr> = explicit_peers
+        .iter()
+        .filter_map(|p| p.parse::<SocketAddr>().ok())
+        .collect();
+
     tokio::spawn(async move {
         // We use standard socket for sending broadcast
         let socket = match UdpSocket::bind("0.0.0.0:0").await {
@@ -81,11 +87,9 @@ pub fn spawn_broadcaster(
                         }
 
                         // Send directly to explicit peers
-                        for peer in &explicit_peers {
-                            if let Ok(peer_addr) = peer.parse::<SocketAddr>() {
-                                if let Err(e) = socket.send_to(&encrypted_bytes, peer_addr).await {
-                                    debug!("Unicast to {} failed: {}", peer_addr, e);
-                                }
+                        for &peer_addr in &explicit_addrs {
+                            if let Err(e) = socket.send_to(&encrypted_bytes, peer_addr).await {
+                                debug!("Unicast to {} failed: {}", peer_addr, e);
                             }
                         }
                     }

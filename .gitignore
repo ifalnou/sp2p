@@ -1,2 +1,6 @@
 /target
 /test_*
+/.github/agents
+/.github/instructions
+/.github/skills
+/.github/copilot-instructions.md

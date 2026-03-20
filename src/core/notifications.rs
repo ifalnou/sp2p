@@ -50,24 +50,21 @@ pub fn spawn_notification_debouncer() -> mpsc::UnboundedSender<FileReceivedEvent
                 _ = interval.tick() => {
                     let now = time::Instant::now();
 
-                    for (inbox, root_group) in grouped_notifications.iter_mut() {
-                        let mut to_remove = Vec::new();
-                        for (root_name, pending) in root_group.iter() {
+                    grouped_notifications.retain(|inbox, root_group| {
+                        root_group.retain(|_root_name, pending| {
                             if now.duration_since(pending.last_update) >= timeout {
-                                // Flush notification
                                 if pending.file_count == 1 {
                                     send_toast(&format!("Received item in '{}'", inbox), &format!("'{}' has been received.", pending.root_folder));
                                 } else {
                                     send_toast(&format!("Received folder in '{}'", inbox), &format!("'{}' and {} other files have been received.", pending.root_folder, pending.file_count - 1));
                                 }
-                                to_remove.push(root_name.clone());
+                                false // remove flushed entry
+                            } else {
+                                true // keep pending entry
                             }
-                        }
-
-                        for r in to_remove {
-                            root_group.remove(&r);
-                        }
-                    }
+                        });
+                        !root_group.is_empty() // remove empty inbox groups
+                    });
                 }
             }
         }
