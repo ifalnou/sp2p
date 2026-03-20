@@ -87,10 +87,9 @@
         <util:CloseApplication
             Id='Closesp2p'
             Target='sp2p.exe'
-            CloseMessage='yes'
-            TerminateProcess='1'
-            RebootPrompt='no'
-            ElevatedCloseMessage='yes'/>
+            TerminateProcess='0'
+            Timeout='0'
+            RebootPrompt='no'/>
 
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
         <Property Id='DiskPrompt' Value='sp2p Installation'/>
