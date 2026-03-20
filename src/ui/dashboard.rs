@@ -1,13 +1,13 @@
-use eframe::egui;
-use crate::core::state::GLOBAL_STATE;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-lazy_static::lazy_static! {
-    static ref DASHBOARD_RUNNING: AtomicBool = AtomicBool::new(false);
-    static ref DASHBOARD_REQUESTED: AtomicBool = AtomicBool::new(false);
-    static ref HOST_CTX: Mutex<Option<egui::Context>> = Mutex::new(None);
-}
+use eframe::egui;
+
+use crate::core::state::GLOBAL_STATE;
+
+static DASHBOARD_RUNNING: AtomicBool = AtomicBool::new(false);
+static DASHBOARD_REQUESTED: AtomicBool = AtomicBool::new(false);
+static HOST_CTX: Mutex<Option<egui::Context>> = Mutex::new(None);
 
 pub fn spawn_dashboard() {
     DASHBOARD_REQUESTED.store(true, Ordering::SeqCst);

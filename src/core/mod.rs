@@ -1,6 +1,7 @@
-pub mod dirs;
-pub mod router;
 pub mod config;
-pub mod watcher;
-pub mod crypto;pub mod state;
+pub mod crypto;
+pub mod dirs;
 pub mod notifications;
+pub mod router;
+pub mod state;
+pub mod watcher;

@@ -3760,7 +3760,6 @@ dependencies = [
  "dirs",
  "eframe",
  "igd",
- "lazy_static",
  "local-ip-address",
  "notify",
  "notify-rust",

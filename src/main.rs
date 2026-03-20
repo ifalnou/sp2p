@@ -8,13 +8,22 @@ mod ui;
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tray_item::{IconSource, TrayItem};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Event};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::{FormatEvent, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
-use tracing::Event;
+use tray_item::{IconSource, TrayItem};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::System::Console::AllocConsole;
+
+use crate::core::config::Config;
+use crate::core::dirs::AppDirs;
+use crate::core::router::Router;
+use crate::core::watcher::{LocalInboxes, watch_inbox_directory, watch_send_directory};
+use crate::discovery::broadcast::{spawn_broadcaster, spawn_listener};
+use crate::discovery::upnp::forward_port;
+use crate::transfer::server::spawn_server;
 
 struct CustomFormatter {
     name: String,
@@ -39,17 +48,6 @@ where
         writeln!(writer)
     }
 }
-
-#[cfg(target_os = "windows")]
-use windows_sys::Win32::System::Console::AllocConsole;
-
-use crate::core::dirs::AppDirs;
-use crate::core::router::Router;
-use crate::core::watcher::{LocalInboxes, watch_inbox_directory, watch_send_directory};
-use crate::discovery::broadcast::{spawn_broadcaster, spawn_listener};
-use crate::discovery::upnp::forward_port;
-use crate::core::config::Config;
-use crate::transfer::server::spawn_server;
 
 #[derive(Parser, Debug)]
 #[command(name = "sp2p")]
@@ -161,13 +159,13 @@ async fn main() {
     // 5. Start Notifications
     let notify_tx = crate::core::notifications::spawn_notification_debouncer();
 
-    // 6. Start TCP File Acceptance Server
+    // 6. Start TCP Server
     spawn_server(args.port, dirs.inbox.clone(), crypto_key.clone(), notify_tx);
 
     // Generate a unique instance ID for broadcast loopback avoidance
     let instance_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
 
-    // 6. Start Discovery (UDP Broadcasts)
+    // 7. Start Discovery (UDP Broadcasts)
     spawn_broadcaster(
         local_inboxes.clone(),
         args.port,
@@ -180,51 +178,14 @@ async fn main() {
     );
     spawn_listener(router.clone(), instance_id, args.network, crypto_key.clone());
 
-    // 7. Request UPnP Port Forwarding async (unless disabled)
+    // 8. Request UPnP Port Forwarding (unless disabled)
     if !args.no_upnp {
         forward_port(args.port);
     }
 
-    // 8. Setup System Tray
+    // 9. Setup System Tray & Shutdown
     let (tx, mut rx) = mpsc::unbounded_channel();
-
-    let inbox_path = dirs.inbox.clone();
-    let send_path = dirs.send.clone();
-
-    // We only need to hold the tray to prevent it from dropping
-    let _tray = if !args.no_tray {
-        match TrayItem::new("sp2p", IconSource::Resource("app-icon")) {
-            Ok(mut tray) => {
-                tray.add_menu_item("Dashboard", move || {
-                    crate::ui::dashboard::spawn_dashboard();
-                }).unwrap_or_else(|e| tracing::warn!("Failed to add Dashboard menu: {}", e));
-
-                tray.add_menu_item("Open Inbox", move || {
-                    if let Err(e) = std::process::Command::new("explorer").arg(&inbox_path).spawn() {
-                        tracing::warn!("Failed to open inbox folder: {}", e);
-                    }
-                }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Inbox menu: {}", e));
-
-                tray.add_menu_item("Open Send", move || {
-                    if let Err(e) = std::process::Command::new("explorer").arg(&send_path).spawn() {
-                        tracing::warn!("Failed to open send folder: {}", e);
-                    }
-                }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Send menu: {}", e));
-
-                let quit_tx = tx.clone();
-                tray.add_menu_item("Quit", move || {
-                    let _ = quit_tx.send(());
-                }).unwrap_or_else(|e| tracing::warn!("Failed to add quit menu: {}", e));
-                Some(tray)
-            },
-            Err(e) => {
-                tracing::warn!("Failed to create system tray: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+    let _tray = if !args.no_tray { setup_tray(&dirs, tx) } else { None };
 
     info!("sp2p initialized successfully on port {}. Standing by.", args.port);
 
@@ -235,6 +196,41 @@ async fn main() {
         }
         _ = rx.recv() => {
             info!("Quit requested via System Tray, shutting down.");
+        }
+    }
+}
+
+fn setup_tray(dirs: &AppDirs, quit_tx: mpsc::UnboundedSender<()>) -> Option<TrayItem> {
+    let inbox_path = dirs.inbox.clone();
+    let send_path = dirs.send.clone();
+
+    match TrayItem::new("sp2p", IconSource::Resource("app-icon")) {
+        Ok(mut tray) => {
+            tray.add_menu_item("Dashboard", move || {
+                crate::ui::dashboard::spawn_dashboard();
+            }).unwrap_or_else(|e| tracing::warn!("Failed to add Dashboard menu: {}", e));
+
+            tray.add_menu_item("Open Inbox", move || {
+                if let Err(e) = std::process::Command::new("explorer").arg(&inbox_path).spawn() {
+                    tracing::warn!("Failed to open inbox folder: {}", e);
+                }
+            }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Inbox menu: {}", e));
+
+            tray.add_menu_item("Open Send", move || {
+                if let Err(e) = std::process::Command::new("explorer").arg(&send_path).spawn() {
+                    tracing::warn!("Failed to open send folder: {}", e);
+                }
+            }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Send menu: {}", e));
+
+            tray.add_menu_item("Quit", move || {
+                let _ = quit_tx.send(());
+            }).unwrap_or_else(|e| tracing::warn!("Failed to add quit menu: {}", e));
+
+            Some(tray)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to create system tray: {}", e);
+            None
         }
     }
 }

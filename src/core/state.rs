@@ -23,15 +23,7 @@ pub struct TransferState {
     pub history: Vec<TransferHistoryItem>,
 }
 
-impl TransferState {
-    pub fn new() -> Self {
-        Self {
-            active_transfers: Vec::new(),
-            history: Vec::new(),
-        }
-    }
-}
-
-lazy_static::lazy_static! {
-    pub static ref GLOBAL_STATE: RwLock<TransferState> = RwLock::new(TransferState::new());
-}
+pub static GLOBAL_STATE: RwLock<TransferState> = RwLock::new(TransferState {
+    active_transfers: Vec::new(),
+    history: Vec::new(),
+});

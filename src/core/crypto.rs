@@ -3,6 +3,8 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit, OsRng},
     AeadCore, ChaCha20Poly1305, Key, Nonce,
 };
+use snow::{Builder, TransportState};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Derives a 32-byte symmetric key from a password string using Argon2id.
 ///
@@ -39,9 +41,6 @@ pub fn encrypt_udp(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, &'static
     combined.extend_from_slice(&ciphertext);
     Ok(combined)
 }
-
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use snow::{Builder, TransportState};
 
 /// Decrypts a UDP payload. Expects the first 12 bytes to be the nonce.
 pub fn decrypt_udp(key: &[u8; 32], combined: &[u8]) -> Result<Vec<u8>, &'static str> {

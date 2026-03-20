@@ -40,6 +40,40 @@ impl LocalInboxes {
     }
 }
 
+/// Parses a file path under the send directory into (inbox_name, relative_file_path).
+/// Returns None if the path doesn't represent a valid sendable file.
+fn parse_send_file_path(path: &std::path::Path, send_dir: &std::path::Path) -> Option<(String, String)> {
+    let relative = path.strip_prefix(send_dir).ok()?;
+    let mut components = relative.components();
+    let inbox_name = components.next()?.as_os_str().to_str()?.to_string();
+    let rel_file_path: PathBuf = components.collect();
+    if rel_file_path.as_os_str().is_empty() {
+        return None;
+    }
+    Some((inbox_name, rel_file_path.to_string_lossy().replace("\\", "/")))
+}
+
+/// Recursively collects all file paths under a directory.
+fn collect_files_recursive(dir: &std::path::Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        if let Ok(entries) = fs::read_dir(&current) {
+            for entry in entries.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    let path = entry.path();
+                    if ft.is_dir() {
+                        stack.push(path);
+                    } else if ft.is_file() {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    files
+}
+
 /// Watches the `inbox` folder for new subdirectories created/deleted by the user
 pub fn watch_inbox_directory(inbox_dir: PathBuf, local_inboxes: Arc<LocalInboxes>) {
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -93,39 +127,16 @@ fn rescan_send_directory_for_inbox(
         return;
     }
 
-    let mut stack = vec![inbox_dir.clone()];
-    while let Some(dir) = stack.pop() {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    let path = entry.path();
-                    if file_type.is_dir() {
-                        stack.push(path);
-                    } else if file_type.is_file() {
-                        if let Ok(relative_path) = path.strip_prefix(send_dir) {
-                            let mut components = relative_path.components();
-                            if let Some(_inbox_component) = components.next() {
-                                let rel_file_path: PathBuf = components.collect();
-                                if !rel_file_path.as_os_str().is_empty() {
-                                    let mut set = in_progress.lock().unwrap();
-                                    if !set.contains(&path) {
-                                        set.insert(path.clone());
-                                        let rel_file_path_str = rel_file_path.to_string_lossy().replace("\\", "/");
-                                        handle_new_file_to_send(
-                                            path.clone(),
-                                            inbox_name.to_string(),
-                                            rel_file_path_str,
-                                            router.clone(),
-                                            in_progress.clone(),
-                                            send_dir.to_path_buf(),
-                                            crypto_key.clone()
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+    for path in collect_files_recursive(&inbox_dir) {
+        if let Some((inbox, rel_path)) = parse_send_file_path(&path, send_dir) {
+            let mut set = in_progress.lock().unwrap();
+            if !set.contains(&path) {
+                set.insert(path.clone());
+                drop(set);
+                handle_new_file_to_send(
+                    path, inbox, rel_path, router.clone(),
+                    in_progress.clone(), send_dir.to_path_buf(), crypto_key.clone(),
+                );
             }
         }
     }
@@ -167,58 +178,26 @@ pub fn watch_send_directory(send_dir: PathBuf, router: Router, crypto_key: Arc<[
             tokio::select! {
                 Some(event) = rx.recv() => {
                     if event.kind.is_create() || event.kind.is_modify() {
-                        let mut all_paths = Vec::new();
-                        for path in event.paths {
-                            if path.is_dir() {
-                                let mut stack = vec![path];
-                                while let Some(dir) = stack.pop() {
-                                    if let Ok(entries) = std::fs::read_dir(dir) {
-                                        for entry in entries.flatten() {
-                                            if let Ok(file_type) = entry.file_type() {
-                                                if file_type.is_dir() {
-                                                    stack.push(entry.path());
-                                                } else if file_type.is_file() {
-                                                    all_paths.push(entry.path());
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if path.is_file() {
-                                all_paths.push(path);
+                        let all_paths: Vec<PathBuf> = event.paths.into_iter().flat_map(|p| {
+                            if p.is_dir() {
+                                collect_files_recursive(&p)
+                            } else if p.is_file() {
+                                vec![p]
+                            } else {
+                                vec![]
                             }
-                        }
+                        }).collect();
 
                         for path in all_paths {
-                            // Only react if it's placed inside a subfolder representing an inbox name
-                            // e.g., send/bob/document.txt
-                            if let Ok(relative_path) = path.strip_prefix(&send_dir_clone) {
-                                let mut components = relative_path.components();
-                                if let Some(inbox_component) = components.next() {
-                                    let rel_file_path: PathBuf = components.collect();
-                                    // If there are no more components, it means the file is directly under `send/`
-                                    if rel_file_path.as_os_str().is_empty() {
-                                        continue;
-                                    }
-                                    if let Some(inbox_name) = inbox_component.as_os_str().to_str() {
-                                        let mut set = in_progress.lock().unwrap();
-                                        if !set.contains(&path) {
-                                            set.insert(path.clone());
-
-                                            // Normalize the relative path to use '/'
-                                            let rel_file_path_str = rel_file_path.to_string_lossy().replace("\\", "/");
-
-                                            handle_new_file_to_send(
-                                                path.clone(),
-                                                inbox_name.to_string(),
-                                                rel_file_path_str,
-                                                router.clone(),
-                                                in_progress.clone(),
-                                                send_dir_clone.clone(),
-                                                crypto_key.clone()
-                                            );
-                                        }
-                                    }
+                            if let Some((inbox_name, rel_file_path)) = parse_send_file_path(&path, &send_dir_clone) {
+                                let mut set = in_progress.lock().unwrap();
+                                if !set.contains(&path) {
+                                    set.insert(path.clone());
+                                    drop(set);
+                                    handle_new_file_to_send(
+                                        path, inbox_name, rel_file_path, router.clone(),
+                                        in_progress.clone(), send_dir_clone.clone(), crypto_key.clone(),
+                                    );
                                 }
                             }
                         }
