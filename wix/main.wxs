@@ -86,6 +86,21 @@
         <Property Id='DiskPrompt' Value='sp2p Installation'/>
 
         <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id="ProgramMenuFolder">
+                <Directory Id="ApplicationProgramsFolder" Name="sp2p">
+                    <Component Id="ApplicationShortcut" Guid="*">
+                        <Shortcut Id="ApplicationStartMenuShortcut"
+                                  Name="sp2p"
+                                  Description="sp2p file sharing"
+                                  Target="[#exe0]"
+                                  WorkingDirectory="APPLICATIONFOLDER">
+                              <ShortcutProperty Key="System.AppUserModel.ID" Value="SP2P"/>
+                        </Shortcut>
+                        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+                        <RegistryValue Root="HKCU" Key="Software\sp2p" Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+                    </Component>
+                </Directory>
+            </Directory>
             <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
                 <Directory Id='APPLICATIONFOLDER' Name='sp2p'>
 
@@ -126,15 +141,7 @@
                                 Name='sp2p.exe'
                                 DiskId='1'
                                 Source='$(var.CargoTargetBinDir)\sp2p.exe'
-                                KeyPath='yes'>
-                                <Shortcut Id="ApplicationStartMenuShortcut"
-                                          Name="sp2p"
-                                          Description="A straightforward file-sharing tool"
-                                          WorkingDirectory="Bin"
-                                          Advertise="yes">
-                                    <ShortcutProperty Key="System.AppUserModel.ID" Value="SP2P"/>
-                                </Shortcut>
-                            </File>
+                                KeyPath='yes'/>
                         </Component>
                     </Directory>
                 </Directory>
@@ -150,6 +157,7 @@
             AllowAdvertise='no'
             Display='expand'
             Absent='disallow'>
+            <ComponentRef Id="ApplicationShortcut" />
 
             <!--
               Uncomment the following `ComponentRef` tag to add the license
