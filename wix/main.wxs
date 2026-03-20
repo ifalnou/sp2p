@@ -93,10 +93,6 @@
 
         <Property Id='MSIRESTARTMANAGERCONTROL' Value='Disable'/>
 
-        <InstallExecuteSequence>
-            <Custom Action='WixCloseApplications' Before='InstallValidate'/>
-        </InstallExecuteSequence>
-
         <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
         <Property Id='DiskPrompt' Value='sp2p Installation'/>
 
