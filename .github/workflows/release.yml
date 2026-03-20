@@ -61,8 +61,8 @@ jobs:
           mkdir sp2p-release
           Copy-Item .\target\release\sp2p.exe -Destination .\sp2p-release\
           Copy-Item .\ROADMAP.md -Destination .\sp2p-release\
-          Compress-Archive -Path .\sp2p-release\* -DestinationPath ".\sp2p-v${ver}-portable.zip"
-          Get-ChildItem .\target\wix\*.msi | Rename-Item -NewName "sp2p-v${ver}-setup.msi"
+          Compress-Archive -Path .\sp2p-release\* -DestinationPath ".\sp2p-v${ver}-portable.zip" -Force
+          Get-ChildItem .\target\wix\*.msi | ForEach-Object { Copy-Item $_.FullName ".\sp2p-v${ver}-setup.msi" -Force }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -70,7 +70,7 @@ jobs:
         with:
           files: |
             sp2p-v${{ steps.version.outputs.VERSION }}-portable.zip
-            target/wix/sp2p-v${{ steps.version.outputs.VERSION }}-setup.msi
+            sp2p-v${{ steps.version.outputs.VERSION }}-setup.msi
           draft: false
           prerelease: false
           generate_release_notes: true
