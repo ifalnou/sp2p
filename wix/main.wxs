@@ -63,7 +63,7 @@
         Id='*'
         Name='sp2p'
         UpgradeCode='31F5E512-3FB4-4C9B-A03A-D9ED815BF548'
-        Manufacturer='SP2P Contributors'
+        Manufacturer='Ifal nou'
         Language='1033'
         Codepage='1252'
         Version='$(var.Version)'>
@@ -71,7 +71,7 @@
         <Package Id='*'
             Keywords='Installer'
             Description='A straightforward file-sharing tool.'
-            Manufacturer='SP2P Contributors'
+            Manufacturer='Ifal nou'
             InstallerVersion='450'
             Languages='1033'
             Compressed='yes'
@@ -88,6 +88,7 @@
             Id='Closesp2p'
             Target='sp2p.exe'
             CloseMessage='yes'
+            TerminateProcess='1'
             RebootPrompt='no'
             ElevatedCloseMessage='yes'/>
 
@@ -202,7 +203,7 @@
           the following `WixUILicenseRTF` tag and changing the `Value`
           attribute.
         -->
-        <!-- <WixVariable Id='WixUILicenseRtf' Value='Relative\Path\to\Eula.rtf'/> -->
+        <WixVariable Id='WixUILicenseRtf' Value='wix\License.rtf'/>
 
 
         <!--
