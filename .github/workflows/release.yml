@@ -42,7 +42,7 @@ jobs:
         run: cargo build --release
 
       - name: Install cargo-wix
-        run: cargo install cargo-wix
+        run: cargo install cargo-wix --force
 
       - name: Build MSI Installer
         run: cargo wix --nocapture -v
