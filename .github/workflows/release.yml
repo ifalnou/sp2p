@@ -41,6 +41,12 @@ jobs:
       - name: Build Release Binary
         run: cargo build --release
 
+      - name: Install cargo-wix
+        run: cargo install cargo-wix
+
+      - name: Build MSI Installer
+        run: cargo wix --nocapture -v
+
       - name: Package Release
         shell: pwsh
         run: |
@@ -53,7 +59,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: sp2p-windows-x86_64.zip
+          files: |
+            sp2p-windows-x86_64.zip
+            target/wix/*.msi
           draft: false
           prerelease: false
           generate_release_notes: true

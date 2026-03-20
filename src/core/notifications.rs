@@ -81,6 +81,7 @@ fn send_toast(summary: &str, body: &str) {
         .summary(summary)
         .body(body)
         .appname("sp2p")
+        .app_id("SP2P")
         .show()
     {
         error!("Failed to send desktop notification: {}", e);
