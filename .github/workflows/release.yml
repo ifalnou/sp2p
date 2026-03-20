@@ -44,24 +44,33 @@ jobs:
       - name: Install cargo-wix
         run: cargo install cargo-wix --force
 
+      - name: Extract Version
+        id: version
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
+
       - name: Build MSI Installer
-        run: cargo wix --nocapture -v
+        run: cargo wix --nocapture -v -C "-ext" -C "WixUtilExtension"
 
       - name: Package Release
         shell: pwsh
         run: |
+          $ver = "${{ steps.version.outputs.VERSION }}"
           mkdir sp2p-release
           Copy-Item .\target\release\sp2p.exe -Destination .\sp2p-release\
           Copy-Item .\ROADMAP.md -Destination .\sp2p-release\
-          Compress-Archive -Path .\sp2p-release\* -DestinationPath .\sp2p-windows-x86_64.zip
+          Compress-Archive -Path .\sp2p-release\* -DestinationPath ".\sp2p-v${ver}-portable.zip"
+          Get-ChildItem .\target\wix\*.msi | Rename-Item -NewName "sp2p-v${ver}-setup.msi"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            sp2p-windows-x86_64.zip
-            target/wix/*.msi
+            sp2p-v${{ steps.version.outputs.VERSION }}-portable.zip
+            target/wix/sp2p-v${{ steps.version.outputs.VERSION }}-setup.msi
           draft: false
           prerelease: false
           generate_release_notes: true
