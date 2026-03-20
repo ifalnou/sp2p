@@ -92,3 +92,6 @@ Based on initial testing and usage, the following features have been identified 
 
 ### 5.1 Advanced Networking (Pending Evaluation)
 - **NAT Traversal (Hole Punching) & Relay Fallback:** Deferred for now. UPnP covers basic WAN scenarios. If extended usage and testing indicate strict NAT/UPnP failure is a common bottleneck, STUN/TURN based UDP hole punching or fallback relays will be reconsidered.
+
+### 5.2 Storage Customization
+- **Hot-Reloadable Data Directory:** Using a native folder-picker UI in the dashboard Settings to let the user securely move the default `inbox`/`send` tracking location. The underlying `config.toml` strictly remains locked inside the native `%LOCALAPPDATA%` namespace. Includes resetting in-memory router state seamlessly without needing to drop the application process.

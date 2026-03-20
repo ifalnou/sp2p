@@ -188,6 +188,9 @@ async fn main() {
     // 8. Setup System Tray
     let (tx, mut rx) = mpsc::unbounded_channel();
 
+    let inbox_path = dirs.inbox.clone();
+    let send_path = dirs.send.clone();
+
     // We only need to hold the tray to prevent it from dropping
     let _tray = if !args.no_tray {
         match TrayItem::new("sp2p", IconSource::Resource("app-icon")) {
@@ -195,6 +198,18 @@ async fn main() {
                 tray.add_menu_item("Dashboard", move || {
                     crate::ui::dashboard::spawn_dashboard();
                 }).unwrap_or_else(|e| tracing::warn!("Failed to add Dashboard menu: {}", e));
+
+                tray.add_menu_item("Open Inbox", move || {
+                    if let Err(e) = std::process::Command::new("explorer").arg(&inbox_path).spawn() {
+                        tracing::warn!("Failed to open inbox folder: {}", e);
+                    }
+                }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Inbox menu: {}", e));
+
+                tray.add_menu_item("Open Send", move || {
+                    if let Err(e) = std::process::Command::new("explorer").arg(&send_path).spawn() {
+                        tracing::warn!("Failed to open send folder: {}", e);
+                    }
+                }).unwrap_or_else(|e| tracing::warn!("Failed to add Open Send menu: {}", e));
 
                 let quit_tx = tx.clone();
                 tray.add_menu_item("Quit", move || {

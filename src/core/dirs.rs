@@ -11,12 +11,21 @@ pub struct AppDirs {
 impl AppDirs {
     pub fn init(override_dir: Option<PathBuf>) -> std::io::Result<Self> {
         let root = if let Some(d) = override_dir {
-            d
+            if d.is_absolute() {
+                d
+            } else {
+                std::env::current_dir()?.join(d)
+            }
         } else {
-            let mut exe = std::env::current_exe()?;
-            exe.pop(); // Remove the executable name
-            exe
+            dirs::data_local_dir()
+                .map(|p| p.join("sp2p"))
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Local data directory not found"))?
         };
+
+        if !root.exists() {
+            info!("Creating root directory at {:?}", root);
+            fs::create_dir_all(&root)?;
+        }
 
         let inbox = root.join("inbox");
         let send = root.join("send");

@@ -66,13 +66,13 @@ pub fn watch_inbox_directory(inbox_dir: PathBuf, local_inboxes: Arc<LocalInboxes
         while let Some(event) = rx.recv().await {
             // For now, on any structural change inside `inbox/`, we rescan the whole folder.
             // This is simple, resilient to weird edge cases, and fast enough for a single folder.
-            if event.kind.is_create() || event.kind.is_remove() {
-                // Determine the folder that changed from paths
+            if event.kind.is_create() || event.kind.is_remove() || event.kind.is_modify() {
                 if let Some(path) = event.paths.first() {
-                    if let Some(parent) = path.parent() {
-                        if parent == inbox_dir {
-                            local_inboxes.scan_initial(&inbox_dir);
-                        }
+                    // Because we watch `inbox_dir` NonRecursive, any event here relates to it.
+                    // Instead of strict equality parent checking, just verify it starts with `inbox_dir`
+                    // or is `inbox_dir` itself.
+                    if path.starts_with(&inbox_dir) || path == &inbox_dir {
+                        local_inboxes.scan_initial(&inbox_dir);
                     }
                 }
             }
