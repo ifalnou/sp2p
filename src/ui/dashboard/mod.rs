@@ -1,5 +1,6 @@
 mod paint;
 mod settings;
+mod theme;
 mod window;
 
 use std::ffi::c_void;

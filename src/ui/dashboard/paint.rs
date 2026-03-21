@@ -3,6 +3,7 @@ use windows_sys::Win32::Graphics::Gdi::*;
 
 use crate::core::state::GLOBAL_STATE;
 
+use super::theme::ThemeColors;
 use super::wide;
 
 pub fn draw_heading(hdc: HDC, bold_font: HGDIOBJ, x: i32, y: &mut i32, text: &str) {
@@ -15,14 +16,18 @@ pub fn draw_heading(hdc: HDC, bold_font: HGDIOBJ, x: i32, y: &mut i32, text: &st
     *y += 22;
 }
 
-pub fn draw_separator(hdc: HDC, left: i32, right: i32, y: &mut i32) {
+pub fn draw_separator(hdc: HDC, left: i32, right: i32, y: &mut i32, color: u32) {
     let rc = RECT {
         left,
         top: *y,
         right,
         bottom: *y + 1,
     };
-    unsafe { FillRect(hdc, &rc, GetSysColorBrush(COLOR_GRAYTEXT)) };
+    unsafe {
+        let brush = CreateSolidBrush(color);
+        FillRect(hdc, &rc, brush);
+        DeleteObject(brush);
+    }
     *y += 8;
 }
 
@@ -31,9 +36,9 @@ pub fn draw_line(hdc: HDC, x: i32, y: i32, text: &str) {
     unsafe { TextOutW(hdc, x, y, w.as_ptr(), (w.len() - 1) as i32) };
 }
 
-pub fn paint_progress(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &mut i32) {
+pub fn paint_progress(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &mut i32, colors: &ThemeColors) {
     draw_heading(hdc, bold_font, left, y, "Active Transfers");
-    draw_separator(hdc, left, right, y);
+    draw_separator(hdc, left, right, y, colors.separator);
 
     let global = GLOBAL_STATE.read().unwrap();
     if global.active_transfers.is_empty() {
@@ -51,7 +56,7 @@ pub fn paint_progress(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &m
 
         unsafe {
             // Progress bar background
-            let bg_brush = CreateSolidBrush(0x00E0E0E0);
+            let bg_brush = CreateSolidBrush(colors.progress_bg);
             let bg = RECT {
                 left,
                 top: *y,
@@ -96,9 +101,9 @@ pub fn paint_progress(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &m
     }
 }
 
-pub fn paint_history(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &mut i32) {
+pub fn paint_history(hdc: HDC, bold_font: HGDIOBJ, left: i32, right: i32, y: &mut i32, colors: &ThemeColors) {
     draw_heading(hdc, bold_font, left, y, "Recent History");
-    draw_separator(hdc, left, right, y);
+    draw_separator(hdc, left, right, y, colors.separator);
 
     let global = GLOBAL_STATE.read().unwrap();
     let mut history = global.history.clone();
@@ -128,7 +133,8 @@ pub fn paint_settings_heading(
     left: i32,
     right: i32,
     y: &mut i32,
+    colors: &ThemeColors,
 ) {
     draw_heading(hdc, bold_font, left, y, "Application Settings");
-    draw_separator(hdc, left, right, y);
+    draw_separator(hdc, left, right, y, colors.separator);
 }

@@ -8,6 +8,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use super::paint;
 use super::settings;
+use super::theme;
 use super::wide;
 use super::DASHBOARD_HWND;
 
@@ -60,12 +61,16 @@ struct DashboardState {
     checkbox_hwnd: HWND,
     active_tab: i32,
     bold_font: HGDIOBJ,
+    dark: bool,
+    bg_brush: HBRUSH,
 }
 
 // ── Window creation + message loop ─────────────────────────────────────────────
 
 pub fn run_dashboard() {
     unsafe {
+        theme::init_dark_mode_support();
+
         let instance = GetModuleHandleW(std::ptr::null());
         let class_name = wide("sp2p_dashboard");
 
@@ -78,7 +83,7 @@ pub fn run_dashboard() {
             hInstance: instance,
             hIcon: std::ptr::null_mut(),
             hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
-            hbrBackground: (COLOR_WINDOW + 1) as usize as HBRUSH,
+            hbrBackground: std::ptr::null_mut(),
             lpszMenuName: std::ptr::null(),
             lpszClassName: class_name.as_ptr(),
             hIconSm: std::ptr::null_mut(),
@@ -215,12 +220,23 @@ fn on_create(hwnd: HWND) -> LRESULT {
         lf.lfWeight = FW_BOLD;
         let bold_font = CreateFontIndirectW(&lf);
 
+        // ── Theme setup ────────────────────────────────────────────────────
+        let dark = theme::is_dark_mode();
+        theme::apply_dark_title_bar(hwnd, dark);
+        theme::allow_dark_mode_for_window(hwnd, dark);
+        theme::apply_control_theme(tab_hwnd, dark);
+        theme::apply_control_theme(checkbox_hwnd, dark);
+        theme::refresh_theme();
+        let bg_brush = CreateSolidBrush(theme::colors(dark).background);
+
         // ── Store per-window state ─────────────────────────────────────────
         let state = Box::new(DashboardState {
             tab_hwnd,
             checkbox_hwnd,
             active_tab: 0,
             bold_font,
+            dark,
+            bg_brush,
         });
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
         SetTimer(hwnd, TIMER_REFRESH, 500, None);
@@ -235,6 +251,9 @@ fn on_destroy(hwnd: HWND) -> LRESULT {
             let state = Box::from_raw(ptr);
             if !state.bold_font.is_null() {
                 DeleteObject(state.bold_font);
+            }
+            if !state.bg_brush.is_null() {
+                DeleteObject(state.bg_brush);
             }
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         }
@@ -293,6 +312,41 @@ fn on_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 0
             }
 
+            WM_ERASEBKGND => {
+                let hdc = wparam as HDC;
+                let mut rc: RECT = std::mem::zeroed();
+                GetClientRect(hwnd, &mut rc);
+                FillRect(hdc, &rc, state.bg_brush);
+                1
+            }
+
+            WM_CTLCOLORSTATIC if state.dark => {
+                let hdc = wparam as HDC;
+                let colors = theme::colors(true);
+                SetTextColor(hdc, colors.text);
+                SetBkMode(hdc, TRANSPARENT as i32);
+                state.bg_brush as LRESULT
+            }
+
+            WM_SETTINGCHANGE => {
+                let new_dark = theme::is_dark_mode();
+                if new_dark != state.dark {
+                    state.dark = new_dark;
+                    theme::apply_dark_title_bar(hwnd, new_dark);
+                    theme::allow_dark_mode_for_window(hwnd, new_dark);
+                    theme::apply_control_theme(state.tab_hwnd, new_dark);
+                    theme::apply_control_theme(state.checkbox_hwnd, new_dark);
+                    theme::refresh_theme();
+                    if !state.bg_brush.is_null() {
+                        DeleteObject(state.bg_brush);
+                    }
+                    state.bg_brush =
+                        CreateSolidBrush(theme::colors(new_dark).background);
+                    InvalidateRect(hwnd, std::ptr::null(), 1);
+                }
+                0
+            }
+
             WM_PAINT => {
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
                 let hdc = BeginPaint(hwnd, &mut ps);
@@ -306,20 +360,21 @@ fn on_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                     right: client.right,
                     bottom: client.bottom,
                 };
-                FillRect(hdc, &content, (COLOR_WINDOW + 1) as usize as HBRUSH);
+                FillRect(hdc, &content, state.bg_brush);
 
+                let colors = theme::colors(state.dark);
                 let old_font = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
                 SetBkMode(hdc, TRANSPARENT as i32);
-                SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+                SetTextColor(hdc, colors.text);
 
                 let left = MARGIN;
                 let right = client.right - MARGIN;
                 let mut y = TAB_HEIGHT + 10;
 
                 match state.active_tab {
-                    0 => paint::paint_progress(hdc, state.bold_font, left, right, &mut y),
-                    1 => paint::paint_history(hdc, state.bold_font, left, right, &mut y),
-                    2 => paint::paint_settings_heading(hdc, state.bold_font, left, right, &mut y),
+                    0 => paint::paint_progress(hdc, state.bold_font, left, right, &mut y, &colors),
+                    1 => paint::paint_history(hdc, state.bold_font, left, right, &mut y, &colors),
+                    2 => paint::paint_settings_heading(hdc, state.bold_font, left, right, &mut y, &colors),
                     _ => {}
                 }
 
