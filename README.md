@@ -36,7 +36,7 @@ Once started:
 Run `sp2p.exe --help` to see all available overrides:
 
 ```bash
-sp2p 0.1.1
+sp2p 0.1.2
 Simple P2P File Transfer via Folders
 
 USAGE:
